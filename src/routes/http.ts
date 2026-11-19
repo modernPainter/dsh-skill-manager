@@ -1,0 +1,195 @@
+/**
+ * routes 共享层 · HTTP 围栏：请求信任栅栏（复用宿主 `/api` 模型，见 RouteFence）、
+ * JSON 响应与错误映射、请求体读取、查询/字段读取与文件存在性检查。
+ */
+
+import { stat } from 'node:fs/promises'
+import type { IncomingMessage, ServerResponse } from 'node:http'
+import { errorText } from '../error-text.ts'
+import { RepoFetchError } from '../repo.ts'
+import { StoreError } from '../store.ts'
+
+/** Cap on JSON request bodies (toggle/create payloads are tiny). */
+export const MAX_JSON_BODY_BYTES = 64 * 1024
+
+/**
+ * Cap on a raw binary upload — one skill ZIP, sent as-is.
+ *
+ * Deliberately not base64-in-JSON: base64 inflates by a third, forces the whole
+ * archive through a string, and would raise the JSON cap for every other route.
+ * 32 MiB is roomy for a skill bundle (the per-skill cap is 10 MiB) while still
+ * small enough that a stuck client cannot pin memory for long.
+ */
+export const MAX_BINARY_BODY_BYTES = 32 * 1024 * 1024
+
+/** The request body exceeded the route's cap; the caller answers 413. */
+export class PayloadTooLargeError extends Error {
+  constructor() {
+    super('request body too large')
+    this.name = 'PayloadTooLargeError'
+  }
+}
+
+/**
+ * Read a raw binary body. Throws {@link PayloadTooLargeError} as soon as the
+ * running total crosses the cap — the stream is not buffered to the end first,
+ * so an oversized upload cannot grow without bound before being rejected.
+ * @param req - incoming request.
+ * @param limit - byte cap.
+ * @returns the whole body (empty buffer for a bodyless request).
+ */
+export async function readBinaryBody(req: IncomingMessage, limit = MAX_BINARY_BODY_BYTES): Promise<Buffer> {
+  const chunks: Buffer[] = []
+  let size = 0
+  for await (const chunk of req) {
+    const buffer = chunk as Buffer
+    size += buffer.length
+    if (size > limit) {
+      // Drain the remainder so the connection can carry the 413 response
+      // instead of sitting half-read. The for-await iterator closes on throw.
+      req.resume()
+      throw new PayloadTooLargeError()
+    }
+    chunks.push(buffer)
+  }
+  return Buffer.concat(chunks)
+}
+
+/** Loopback literal check plus browser same-origin markers. */
+export function isLoopbackRequest(request: IncomingMessage): boolean {
+  const address = request.socket.remoteAddress
+  if (address !== '127.0.0.1' && address !== '::1' && address !== '::ffff:127.0.0.1') return false
+  const host = request.headers.host
+  if (typeof host !== 'string') return false
+  let hostUrl: URL
+  try {
+    hostUrl = new URL('http://' + host)
+  } catch {
+    return false
+  }
+  if (hostUrl.hostname !== '127.0.0.1' && hostUrl.hostname !== 'localhost' && hostUrl.hostname !== '[::1]') return false
+  if (request.headers['sec-fetch-site'] === 'cross-site') return false
+  const origin = request.headers.origin
+  if (origin === undefined) return true
+  try {
+    return new URL(origin).host === hostUrl.host
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The route family's request fence: the HTTP status a request is rejected
+ * with (`401` unauthenticated / `403` untrusted authority), or `undefined`
+ * when it may reach the handler.
+ *
+ * dsh owns **one** browser-trust model for the whole `/api` tree — loopback,
+ * the listener's own bind address, every `--trusted-host` authority, then the
+ * browser session — and publishes it as `ctx.connection.requestRejection`,
+ * whose contract is written for exactly this case ("apply Connection's
+ * Host/Origin checks ... to another Web route"). Our paths are exact routes
+ * registered beside the shared `/api` prefix, so the host's own fence never
+ * sees them; asking its entry point instead of re-deriving the rule keeps a
+ * single trust model rather than a second, stricter one. Issue #17 is what the
+ * second one cost: behind a reverse proxy the literals checkable in this file
+ * are the gateway address and the public domain, so every route answered 403
+ * while the rest of the GUI worked.
+ */
+export type RouteFence = (request: IncomingMessage) => number | undefined
+
+/**
+ * Fallback fence for a host that mounts no Connection service (unit tests, and
+ * any composition serving the webserver alone): the historical literal-loopback
+ * check, so a missing service degrades to the previous behaviour instead of an
+ * open or a dead route family.
+ */
+export function loopbackOnlyFence(request: IncomingMessage): number | undefined {
+  return isLoopbackRequest(request) ? undefined : 403
+}
+
+/** One JSON response. */
+export function writeJson(res: ServerResponse, status: number, body: unknown): void {
+  const payload = JSON.stringify(body)
+  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'referrer-policy': 'no-referrer' })
+  res.end(payload)
+}
+
+/** One JSON error response. */
+export function writeError(res: ServerResponse, status: number, error: unknown): void {
+  const body = { error: errorText(error) }
+  writeJson(res, status, body)
+}
+
+/** HTTP status per store business-rule kind (user error, not server fault). */
+export const STORE_ERROR_STATUS = { validation: 400, 'not-found': 404, conflict: 409 } as const
+
+/** Map known error types onto HTTP statuses: repo fetch + store business rules. */
+export function writeRouteError(res: ServerResponse, error: unknown): void {
+  if (error instanceof RepoFetchError) {
+    writeError(res, error.status, error)
+    return
+  }
+  if (error instanceof StoreError) {
+    writeError(res, STORE_ERROR_STATUS[error.kind], error)
+    return
+  }
+  writeError(res, 500, error)
+}
+
+/**
+ * Read a JSON request body (undefined when unparseable). Oversized bodies
+ * throw {@link PayloadTooLargeError} so the route can answer 413 instead of
+ * conflating the two failure modes with a generic 400.
+ */
+export async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown> | undefined> {
+  const chunks: Buffer[] = []
+  let size = 0
+  for await (const chunk of req) {
+    const buffer = chunk as Buffer
+    size += buffer.length
+    if (size > MAX_JSON_BODY_BYTES) throw new PayloadTooLargeError()
+    chunks.push(buffer)
+  }
+  try {
+    const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+    return typeof parsed === 'object' && parsed !== null ? parsed as Record<string, unknown> : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** URL query helper (first value, decoded). */
+export function queryParam(url: URL, name: string): string | undefined {
+  const value = url.searchParams.get(name)
+  return value === null ? undefined : value
+}
+
+/**
+ * 读取请求体里的字符串字段（缺失或类型不符返回 ''）。替代各 handler 里
+ * `body as unknown as XRequest` 的断言 + 手写 typeof 收窄。
+ */
+export function readString(body: Record<string, unknown>, key: string): string {
+  const value = body[key]
+  return typeof value === 'string' ? value : ''
+}
+
+/**
+ * 读取请求体里的字符串数组：非数组返回 []，丢弃非字符串项；默认同时丢弃
+ * 空串（keepEmpty=true 时保留空串，由调用方决定语义）。
+ */
+export function readStrings(body: Record<string, unknown>, key: string, options?: { keepEmpty?: boolean }): string[] {
+  const value = body[key]
+  if (!Array.isArray(value)) return []
+  const keepEmpty = options?.keepEmpty === true
+  return value.filter((item): item is string => typeof item === 'string' && (keepEmpty || item !== ''))
+}
+
+/** Async existence check (import/sync use it on the user root). */
+export async function pathExists(path: string): Promise<boolean> {
+  try {
+    await stat(path)
+    return true
+  } catch {
+    return false
+  }
+}

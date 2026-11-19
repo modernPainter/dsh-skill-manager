@@ -1,0 +1,163 @@
+/** A skill discovered in a GitHub repo under any top-level root (e.g. skills/, templates/). */
+export interface RepoSkillEntry {
+  /** Kebab-case skill name (directory basename). */
+  name: string
+  /** Root-relative skill directory, e.g. skills/code-review. */
+  dir: string
+  /** Root-relative SKILL.md path, e.g. skills/code-review/SKILL.md. */
+  path: string
+  /** Repo root the skill lives in. */
+  root: RepoRoot
+  /** Collection name recorded as origin after import. */
+  origin: string
+  /** Number of files in the skill directory. */
+  fileCount: number
+  /** Total bytes across all files in the skill directory. */
+  totalBytes: number
+  /** Whether a same-named skill already exists locally. */
+  existing: boolean
+}
+
+/**
+ * Skill root in a GitHub repo: the top-level directory that contains skills
+ * (e.g. skills, design-templates, templates). Auto-derived from SKILL.md
+ * locations, not hard-coded.
+ *
+ * The empty string is the repo root itself — a skill whose SKILL.md sits at
+ * the top of the tree (a Claude Code plugin manifest may declare
+ * `"skills": ["./"]`). It is a legal value, not a missing one, so state
+ * sanitizers must accept it instead of coercing it to a default root.
+ */
+export type RepoRoot = string
+
+/** Top-level directory pattern for a skill root: visible, non-dot, safe chars. First char must be alphanum. */
+export const REPO_ROOT_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/
+
+/**
+ * True when a value is a usable root: a visible safe top-level directory name,
+ * or the empty string for the repo root. Guards the persisted store against
+ * corrupt roots without rewriting the repo-root sentinel.
+ */
+export function isValidRepoRoot(value: unknown): value is RepoRoot {
+  return typeof value === 'string' && (value === '' || REPO_ROOT_RE.test(value))
+}
+
+/** GET /api/skill-hub/repo — discover importable skills in a GitHub repo. */
+export interface RepoDiscoverResponse {
+  ok: true
+  repo: string
+  /**
+   * Ref the discovery ran against (release tag / branch / default branch).
+   * Null means the repo has no release and no pinned ref — the client must
+   * ask the user to pick a branch (see `branches`) and pin it first.
+   */
+  ref: string | null
+  /** Branch names to choose from when ref is null (default branch first). */
+  branches?: string[]
+  entries: RepoSkillEntry[]
+  /** GitHub truncated the tree; discovery is partial (mirrors codex walk_truncated). */
+  truncated?: boolean
+}
+
+/** POST /api/skill-hub/repo/import — install selected repo skills. */
+export interface RepoImportRequest {
+  repo: string
+  /** Selected SKILL.md paths from the discover response. */
+  paths: string[]
+  /** The ref the discovery ran against; the import must use the same one. */
+  ref?: string
+}
+
+/** POST /api/skill-hub/repo/import — now creates an async job (B方案) */
+export interface RepoImportResponse {
+  ok: true
+  jobId: string
+  total: number
+  totalBytes: number
+}
+
+/** GET /api/skill-hub/repo/import/progress?jobId=xxx */
+export interface RepoImportProgressResponse {
+  ok: true
+  jobId: string
+  status: 'running' | 'done' | 'cancelled' | 'error'
+  total: number
+  done: number
+  /** 当前正在下载的 skill 名，done < total 时有效 */
+  current?: string
+  /** 当前正在下载的文件路径（相对 skill dir） */
+  currentFile?: string
+  /** 字节级进度 */
+  totalBytes: number
+  downloadedBytes: number
+  /** 下载速度 bytes/sec，running 时有效 */
+  bytesPerSecond?: number
+  imported: Array<{ name: string; origin: string; path: string }>
+  skipped: Array<{ name: string; reason: 'exists' }>
+  failed: Array<{ name: string; error: string }>
+  /**
+   * 本次导入中「让位的已禁用同名占位」名字（issue #16）：这些条目的旧目录已
+   * 移入回收站，新技能随后落地。旧目录挪走即计入，下载失败时也在列。老客户端
+   * 不认这个字段时忽略即可，故为可选。
+   */
+  replaced?: string[]
+  /** error 状态时的原因 */
+  error?: string
+}
+
+/** POST /api/skill-hub/repo/import/cancel */
+export interface RepoImportCancelRequest {
+  jobId: string
+}
+export interface RepoImportCancelResponse {
+  ok: true
+  jobId: string
+  /** A job can already be done, cancelled, or failed when cancel arrives. */
+  status: 'running' | 'done' | 'cancelled' | 'error'
+}
+
+/** GET /api/skill-hub/update — check the plugin's own latest published version. */
+export interface UpdateCheckResponse {
+  ok: true
+  /** Installed plugin version (from the bundled host build). */
+  currentVersion: string
+  /** Latest published version, normalized without the leading v; null when unknown. */
+  latestVersion: string | null
+  /** True when latestVersion is strictly newer than currentVersion. */
+  updateAvailable: boolean
+  /** Release page URL; null when unavailable. */
+  url: string | null
+  /**
+   * Which endpoint answered: `npm`（registry 的 latest tag，用户实际能装到的版本）
+   * or `github`（release 兜底）。两种来源的判定口径不同，排查时要能分清。
+   */
+  source?: 'npm' | 'github'
+  /**
+   * 已经装到磁盘、但宿主还没重启加载的版本。
+   *
+   * 运行中的 `currentVersion` 来自模块加载时的常量，换掉磁盘上的包不会改它 ——
+   * 没有这个字段，界面会一直写着旧版本号、更新按钮一直挂着。
+   */
+  pendingRestartVersion?: string
+  /** Best-effort message when the check failed or no release exists. */
+  error?: string
+}
+
+/** POST /api/skill-hub/update/apply — install one exact version into this profile. */
+export interface UpdateApplyRequest {
+  /** Exact `x.y.z`; the server refuses anything else. */
+  version: string
+}
+
+/** Result of one in-place update attempt. */
+export interface UpdateApplyResponse {
+  ok: true
+  /** Version now on disk; null when nothing was written. */
+  appliedVersion: string | null
+  /** 宿主必须重启才会加载新代码。 */
+  restartRequired: boolean
+  /** 运行中这份拷贝的安装形态：只有 `profile` 才允许自动更新。 */
+  installKind: 'profile' | 'development'
+  /** 失败或不允许时的可读原因。 */
+  error?: string
+}

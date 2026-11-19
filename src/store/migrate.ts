@@ -1,0 +1,326 @@
+import type { DisabledSkill, HubConfig, MarketSourceRecord, MarketStatsSnapshot, SkillStatsCheckpoint, SkillTag, SourceRecord, TrashEntry } from '../protocol.ts'
+import { isValidRepoRoot } from '../protocol/repo.ts'
+import { CONFIG_FIELDS, CONFIG_FIELD_TYPES } from '../protocol/config.ts'
+import { STORE_VERSION } from './paths.ts'
+
+/** Normalized raw sidecar document after schema migration (fields still unvalidated). */
+export interface MigratedStore {
+  version: number
+  disabled: unknown
+  config?: unknown
+  tags?: unknown
+  sources?: unknown
+  marketSources?: unknown
+  trash?: unknown
+  skillStats?: unknown
+  marketStats?: unknown
+  collectionOrder?: unknown
+  sourceGroupOrder?: unknown
+  invocationOverrides?: unknown
+}
+
+/**
+ * Normalize an arbitrary parsed sidecar document to the current schema.
+ * v1 to v2: scenes are dropped (the one-click role merged into group
+ * switches), and origins are migrated into source records (repo = origin
+ * value, commit snapshot empty — the first update check backfills it).
+ * v2 to v3: market sources become records ({ repo, ref?, commitSha? })
+ * instead of bare repo slugs, so a source can pin a release/branch version.
+ * Returns null when the file claims a newer schema than this plugin
+ * understands. The caller must then refuse every write (and back the file up):
+ * starting empty and persisting would irreversibly overwrite the newer state.
+ */
+export function migrateStore(parsed: unknown): MigratedStore | null {
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null
+  const record = parsed as Record<string, unknown>
+  const version = typeof record.version === 'number' ? record.version : 0
+  if (version > STORE_VERSION) return null
+  const disabled = Array.isArray(record.disabled) ? record.disabled : []
+  const config = typeof record.config === 'object' && record.config !== null && !Array.isArray(record.config) ? record.config : undefined
+  const tags = Array.isArray(record.tags) ? record.tags : undefined
+  const trash = Array.isArray(record.trash) ? record.trash : undefined
+  // v2 stored bare slugs; v3 stores records. Normalize both shapes here.
+  const marketSources = Array.isArray(record.marketSources)
+    ? record.marketSources.map((entry) => typeof entry === 'string'
+      ? { repo: entry }
+      : entry)
+    : undefined
+
+  // v2 stores structured source records; v1 only had a skillName to
+  // collection string map (origins). Migrate each origin into a SourceRecord
+  // whose repo is the collection string itself and whose commit snapshot is
+  // empty.
+  let sources: unknown
+  if (Array.isArray(record.sources)) {
+    sources = record.sources
+  } else if (version < 2 && typeof record.origins === 'object' && record.origins !== null && !Array.isArray(record.origins)) {
+    const byOrigin = new Map<string, string[]>()
+    for (const [name, origin] of Object.entries(record.origins as Record<string, unknown>)) {
+      if (typeof origin !== 'string' || origin === '') continue
+      const list = byOrigin.get(origin)
+      if (list === undefined) byOrigin.set(origin, [name])
+      else list.push(name)
+    }
+    sources = [...byOrigin.entries()].map(([repo, skillNames]) => ({
+      repo,
+      root: 'skills',
+      commitSha: '',
+      skills: skillNames.sort((a, b) => a.localeCompare(b)),
+    }))
+  }
+  return {
+    version: STORE_VERSION,
+    disabled,
+    ...(config !== undefined ? { config } : {}),
+    ...(tags !== undefined ? { tags } : {}),
+    ...(sources !== undefined ? { sources } : {}),
+    ...(marketSources !== undefined ? { marketSources } : {}),
+    ...(trash !== undefined ? { trash } : {}),
+    // v4 (skillStats) is a pure addition — older files simply lack the field,
+    // and the loader validates its shape, so pass it through untouched.
+    // marketStats follows the same pattern (validated on load below).
+    ...(record.skillStats !== undefined ? { skillStats: record.skillStats } : {}),
+    ...(record.marketStats !== undefined ? { marketStats: record.marketStats } : {}),
+    ...(Array.isArray(record.collectionOrder) ? { collectionOrder: record.collectionOrder } : {}),
+    ...(Array.isArray(record.sourceGroupOrder) ? { sourceGroupOrder: record.sourceGroupOrder } : {}),
+    ...(Array.isArray(record.invocationOverrides) ? { invocationOverrides: record.invocationOverrides } : {}),
+  }
+}
+
+/** Validated in-memory state hydrated from a migrated document. */
+export interface HydratedState {
+  entries: Map<string, DisabledSkill>
+  config: Partial<HubConfig>
+  tagsById: Map<string, SkillTag>
+  sourcesByRepo: Map<string, SourceRecord>
+  marketSources: MarketSourceRecord[]
+  trashByPath: Map<string, TrashEntry>
+  skillStats: SkillStatsCheckpoint | undefined
+  marketStats: MarketStatsSnapshot | undefined
+  collectionOrder: string[]
+  sourceGroupOrder: string[]
+  invocationOverrides: string[]
+}
+
+/** 小优化：统一的非空字符串数组清洗（去空、去重可选由调用方处理）。 */
+function cleanStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((n): n is string => typeof n === 'string' && n !== '')
+}
+
+/**
+ * 把迁移后的原始文档校验为内存状态：坏条目丢弃、坏桶降级为空，
+ * 绝不因一条脏数据丢掉整个 sidecar（与原 ensureLoaded 内联逻辑一致）。
+ *
+ * 为什么不用 schemastery 换掉这些 typeof —— 已经实测过，结论是不换：
+ * - `Schema.object` 遇到缺字段/类型不符会**抛错**，要复现「只丢这一条」就得
+ *   每条包一层 try/catch，条目多一层嵌套；
+ * - 更致命的是 `Schema.dict(Schema.number())`：manifest 里只要有一个非数字
+ *   值，**整条 source 记录**校验失败。现行为是保留 source、只丢那个坏 path。
+ *   容忍度一旦收紧，用户的历史来源/哈希基线会在下次启动时整条消失；
+ * - 剩下的 typeof 判断是**逐值降级**语义，正是 schema 库不擅长表达的部分。
+ * 容忍度由 `migrate.test.ts` 的 28 个错误注入用例钉住 —— 任何替换实现都要
+ * 先让那份测试全绿。
+ */
+export function hydrateMigratedState(migrated: MigratedStore): HydratedState {
+  const entries = new Map<string, DisabledSkill>()
+  if (Array.isArray(migrated.disabled)) {
+    for (const entry of migrated.disabled) {
+      if (typeof entry?.name === 'string' && typeof entry?.path === 'string') {
+        entries.set(entry.name, entry)
+      }
+    }
+  }
+
+  const config: Partial<HubConfig> = {}
+  const saved = migrated.config as Record<string, unknown> | undefined
+  if (typeof saved === 'object' && saved !== null) {
+    // Walk the shared field list instead of a hand-written subset: adding a
+    // config field must never again mean a value is silently dropped during
+    // hydration (statsWindowDays / statsScanMinutes / githubToken were lost).
+    for (const field of CONFIG_FIELDS) {
+      const value = saved[field]
+      const expected = CONFIG_FIELD_TYPES[field]
+      if (typeof value !== expected) continue
+      if (expected === 'string' && (value as string) === '') continue
+      if (expected === 'number' && !Number.isFinite(value as number)) continue
+      ;(config as unknown as Record<string, unknown>)[field] = value
+    }
+  }
+
+  const tagsById = new Map<string, SkillTag>()
+  if (Array.isArray(migrated.tags)) {
+    for (const entry of migrated.tags as unknown[]) {
+      const tag = entry as { id?: unknown; name?: unknown; skillNames?: unknown; default?: unknown } | null
+      if (tag !== null && typeof tag === 'object' && typeof tag.id === 'string' && typeof tag.name === 'string' && Array.isArray(tag.skillNames)) {
+        tagsById.set(tag.id, {
+          id: tag.id,
+          name: tag.name,
+          skillNames: tag.skillNames.filter((n): n is string => typeof n === 'string'),
+          ...(tag.default === true ? { default: true } : {}),
+        })
+      }
+    }
+  }
+
+  const sourcesByRepo = new Map<string, SourceRecord>()
+  if (Array.isArray(migrated.sources)) {
+    for (const entry of migrated.sources as unknown[]) {
+      const source = entry as { repo?: unknown; ref?: unknown; root?: unknown; commitSha?: unknown; skills?: unknown; manifest?: unknown; localHashes?: unknown } | null
+      if (source !== null && typeof source === 'object' && typeof source.repo === 'string' && source.repo !== '' && Array.isArray(source.skills)) {
+        const manifest = source.manifest as Record<string, unknown> | undefined
+        // 本地内容哈希：只保留「技能名 → 非空字符串」的条目。这是白名单重建
+        // （每次装载都跑），漏掉这里的字段会在下一次装载时静默消失。
+        const localHashes = source.localHashes as Record<string, unknown> | undefined
+        const rawRoot = isValidRepoRoot(source.root) ? source.root : 'skills'
+        sourcesByRepo.set(source.repo, {
+          repo: source.repo,
+          ...(typeof source.ref === 'string' && source.ref !== '' ? { ref: source.ref } : {}),
+          root: rawRoot,
+          commitSha: typeof source.commitSha === 'string' ? source.commitSha : '',
+          skills: source.skills.filter((n): n is string => typeof n === 'string'),
+          ...(manifest !== null && typeof manifest === 'object' && !Array.isArray(manifest)
+            ? { manifest: Object.fromEntries(Object.entries(manifest).filter(([, size]) => typeof size === 'number')) as Record<string, number> }
+            : {}),
+          ...(localHashes !== null && typeof localHashes === 'object' && !Array.isArray(localHashes)
+            ? { localHashes: Object.fromEntries(Object.entries(localHashes).filter(([, hash]) => typeof hash === 'string' && hash !== '')) as Record<string, string> }
+            : {}),
+        })
+      }
+    }
+  }
+
+  const marketSources: MarketSourceRecord[] = []
+  if (Array.isArray(migrated.marketSources)) {
+    for (const entry of migrated.marketSources as unknown[]) {
+      const item = entry as { repo?: unknown; ref?: unknown; commitSha?: unknown } | null
+      if (item !== null && typeof item === 'object' && typeof item.repo === 'string' && item.repo !== '' && !marketSources.some((s) => s.repo === item.repo)) {
+        marketSources.push({
+          repo: item.repo,
+          ...(typeof item.ref === 'string' && item.ref !== '' ? { ref: item.ref } : {}),
+          ...(typeof item.commitSha === 'string' && item.commitSha !== '' ? { commitSha: item.commitSha } : {}),
+        })
+      }
+    }
+  }
+
+  const trashByPath = new Map<string, TrashEntry>()
+  if (Array.isArray(migrated.trash)) {
+    for (const entry of migrated.trash as unknown[]) {
+      const item = entry as { name?: unknown; path?: unknown; movedAt?: unknown; sourcePath?: unknown } | null
+      if (item !== null && typeof item === 'object' && typeof item.name === 'string' && typeof item.path === 'string') {
+        const origin = (item as Record<string, unknown>).origin as { repo?: unknown; root?: unknown; ref?: unknown; commitSha?: unknown } | undefined
+        const tagIds = (item as Record<string, unknown>).tagIds
+        // 按 path 建索引：回收站里同名可以有多条（跨形态/先后两次入站），按名字
+        // 索引会让后一条静默覆盖前一条、把前一份目录留成谁都指不到的孤儿。
+        trashByPath.set(item.path, {
+          name: item.name,
+          path: item.path,
+          movedAt: typeof item.movedAt === 'number' ? item.movedAt : 0,
+          ...(typeof item.sourcePath === 'string' && item.sourcePath !== '' ? { sourcePath: item.sourcePath } : {}),
+          ...(origin !== null && typeof origin === 'object' && typeof origin.repo === 'string' && origin.repo !== '' && isValidRepoRoot(origin.root)
+            ? {
+                origin: {
+                  repo: origin.repo,
+                  root: origin.root,
+                  ...(typeof origin.ref === 'string' && origin.ref !== '' ? { ref: origin.ref } : {}),
+                  commitSha: typeof origin.commitSha === 'string' ? origin.commitSha : '',
+                },
+              }
+            : {}),
+          ...(Array.isArray(tagIds) ? { tagIds: tagIds.filter((id): id is string => typeof id === 'string') } : {}),
+        })
+      }
+    }
+  }
+
+  /**
+   * Validate the cold-path revision bucket: corrupt entries degrade to a
+   * re-read (the revision simply misses), never to bad counts.
+   */
+  function cleanColdRevisions(raw: unknown): { coldRevisions?: SkillStatsCheckpoint['coldRevisions'] } {
+    if (raw === null || typeof raw !== 'object') return {}
+    const revisions: NonNullable<SkillStatsCheckpoint['coldRevisions']> = {}
+    for (const [id, entry] of Object.entries(raw as Record<string, unknown>)) {
+      if (entry === null || typeof entry !== 'object') continue
+      const { rev, createdAt, counts } = entry as { rev?: unknown; createdAt?: unknown; counts?: unknown }
+      if (typeof rev !== 'string' || typeof createdAt !== 'number' || counts === null || typeof counts !== 'object') continue
+      const clean: Record<string, { count: number; lastUsed: number }> = {}
+      for (const [name, stat] of Object.entries(counts as Record<string, unknown>)) {
+        if (stat !== null && typeof stat === 'object'
+          && typeof (stat as { count?: unknown }).count === 'number'
+          && typeof (stat as { lastUsed?: unknown }).lastUsed === 'number') {
+          clean[name] = { count: (stat as { count: number }).count, lastUsed: (stat as { lastUsed: number }).lastUsed }
+        }
+      }
+      revisions[id] = { rev, createdAt, counts: clean }
+    }
+    return { coldRevisions: revisions }
+  }
+
+  let skillStats: SkillStatsCheckpoint | undefined = undefined
+  const savedStats = migrated.skillStats as Partial<SkillStatsCheckpoint> | null | undefined
+  if (savedStats !== null && typeof savedStats === 'object'
+    && typeof savedStats.frozenBefore === 'number' && typeof savedStats.lastFullReconcile === 'number'
+    && typeof savedStats.windowDays === 'number'
+    && typeof savedStats.frozenSessions === 'object' && savedStats.frozenSessions !== null) {
+    // Validate entry shapes too: a corrupt bucket degrades to a fresh
+    // checkpoint (one extra full reconciliation), never to bad counts.
+    const sessions: SkillStatsCheckpoint['frozenSessions'] = {}
+    for (const [id, entry] of Object.entries(savedStats.frozenSessions)) {
+      if (entry === null || typeof entry !== 'object' || typeof entry.createdAt !== 'number'
+        || typeof entry.counts !== 'object' || entry.counts === null) continue
+      const counts: Record<string, { count: number; lastUsed: number }> = {}
+      for (const [name, stat] of Object.entries(entry.counts)) {
+        if (stat !== null && typeof stat === 'object'
+          && typeof (stat as { count?: unknown }).count === 'number'
+          && typeof (stat as { lastUsed?: unknown }).lastUsed === 'number') {
+          counts[name] = { count: (stat as { count: number }).count, lastUsed: (stat as { lastUsed: number }).lastUsed }
+        }
+      }
+      sessions[id] = { createdAt: entry.createdAt, counts }
+    }
+    const rawTotals = (savedStats as { lastTotals?: unknown }).lastTotals
+    const lastTotals = Array.isArray(rawTotals)
+      ? rawTotals.filter((entry): entry is { name: string; count: number; lastUsed?: number } =>
+          entry !== null && typeof entry === 'object'
+          && typeof (entry as { name?: unknown }).name === 'string'
+          && typeof (entry as { count?: unknown }).count === 'number').map((entry) => ({
+            name: (entry as { name: string }).name,
+            count: (entry as { count: number }).count,
+            ...(typeof (entry as { lastUsed?: unknown }).lastUsed === 'number' ? { lastUsed: (entry as { lastUsed: number }).lastUsed } : {}),
+          }))
+      : undefined
+    skillStats = {
+      windowDays: savedStats.windowDays,
+      frozenBefore: savedStats.frozenBefore,
+      frozenSessions: sessions,
+      lastFullReconcile: savedStats.lastFullReconcile,
+      ...(lastTotals !== undefined ? { lastTotals } : {}),
+      ...cleanColdRevisions((savedStats as { coldRevisions?: unknown }).coldRevisions),
+    }
+  }
+
+  let marketStats: MarketStatsSnapshot | undefined = undefined
+  const savedMarketStats = migrated.marketStats as Partial<MarketStatsSnapshot> | null | undefined
+  if (savedMarketStats !== null && typeof savedMarketStats === 'object'
+    && typeof savedMarketStats.fetchedAt === 'number'
+    && typeof savedMarketStats.stats === 'object' && savedMarketStats.stats !== null) {
+    // A corrupt bucket degrades to no snapshot (one cold fetch), never to bad numbers.
+    const stats: MarketStatsSnapshot['stats'] = {}
+    for (const [repo, entry] of Object.entries(savedMarketStats.stats)) {
+      if (entry !== null && typeof entry === 'object'
+        && typeof (entry as { stars?: unknown }).stars === 'number'
+        && typeof (entry as { downloads?: unknown }).downloads === 'number') {
+        stats[repo] = { stars: (entry as { stars: number }).stars, downloads: (entry as { downloads: number }).downloads }
+      }
+    }
+    marketStats = { fetchedAt: savedMarketStats.fetchedAt, stats }
+  }
+
+  const collectionOrder = cleanStringList(migrated.collectionOrder)
+  const sourceGroupOrder = cleanStringList(migrated.sourceGroupOrder)
+  const invocationOverrides = cleanStringList(migrated.invocationOverrides)
+
+  return { entries, config, tagsById, sourcesByRepo, marketSources, trashByPath, skillStats, marketStats, collectionOrder, sourceGroupOrder, invocationOverrides }
+}

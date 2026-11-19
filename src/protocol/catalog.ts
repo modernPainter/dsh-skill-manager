@@ -1,0 +1,263 @@
+/** User-level roots the hub may write to (matches dsh-skill-filesystem ranks 400/500). */
+export type WritableRoot = 'user-dsh' | 'user-agents'
+
+/** Invocation policy resolved by the registry, re-spelled for the wire. */
+export interface HubInvocation {
+  /** Whether model-facing catalogs may load this skill. */
+  modelInvocable: boolean
+  /** Whether human-facing command catalogs may load this skill. */
+  userInvocable: boolean
+}
+
+/** One enabled skill row in the catalog. */
+export interface CatalogSkill {
+  name: string
+  description: string
+  whenToUse?: string
+  invocation: HubInvocation
+  provider: string
+  /** Whether the hub may toggle this skill by renaming files (user-level filesystem skills only). */
+  writable: boolean
+  /**
+   * Whether the hub may toggle this skill without touching its files
+   * (an invocation override flips `modelInvocable`). This covers project
+   * skills and read-only external providers; `writable` implies toggling too.
+   */
+  toggleable?: boolean
+  /** The hub has switched this skill's model invocation off (invocation override; `/name` still works). */
+  modelOverride?: boolean
+  /** 技能来源标识（user-dsh/user-agents/project-dsh/project-agents/...）。 */
+  source: string
+  /** SKILL.md creation time (epoch ms); used for "added" sorting. Absent when unknown. */
+  addedAt?: number
+  /** SKILL.md last-modified time (epoch ms); used for "updated" display. Absent when unknown. */
+  updatedAt?: number
+  /** 项目技能的所属工作区路径（仅 project-dsh/project-agents 来源携带）。 */
+  workspace?: string
+  /** 工作区显示标题（来自 workspace.json；无则回退为路径）。 */
+  workspaceTitle?: string
+  /** UI metadata from agents/openai.yaml (mirrors codex SkillInterface). */
+  displayName?: string
+  shortDescription?: string
+  brandColor?: string
+  iconSmall?: string
+  iconLarge?: string
+  defaultPrompt?: string
+}
+
+/**
+ * 停用台账的一条记录。**不是启用态的真值**。
+ *
+ * 真值是 sidecar 的 `invocationOverrides`（发现文件绝对路径集合）：provider
+ * 只认它，`CatalogSkill.modelOverride` 由它派生。这里存 name / path / root /
+ * description / disabledAt，用于占名、恢复归属和详情反推 —— 后两项是
+ * overrides 没有的信息，所以两份数据不能合并。
+ *
+ * 判定「某个技能是否停用」必须看 `CatalogSkill.modelOverride`，**不要拿这个
+ * 数组反查**：项目技能与外部只读技能停用时只写覆盖，根本不进台账。
+ */
+export interface DisabledSkill {
+  name: string
+  description: string
+  /** Absolute path of the discovery file (SKILL.md / <name>.md), still in place. */
+  path: string
+  root: WritableRoot
+  disabledAt: number
+}
+
+/** One diagnostic: either a file the provider skips, or a loadable skill with an issue. */
+export interface DiagnosticEntry {
+  path: string
+  root: string
+  reason: string
+  /**
+   * 面板呈现级别。`error` = 这个文件被 provider 跳过（解析失败、不可读、
+   * 同名冲突、阻断级审计命中），技能压根进不了列表；`warn` = 技能能加载，
+   * 但 frontmatter 或正文有值得处理的问题。由扫描端单点判定，UI 不做猜测。
+   */
+  level: 'error' | 'warn'
+  /** Whether this diagnostic can be auto-fixed (e.g. unquoted colon). */
+  fixable?: boolean
+  /**
+   * 条目来源。缺省 = 发现诊断（frontmatter / 发现路径 / 同名冲突等）；
+   * `security` = 内容审计（正文里有值得看一眼的东西）。两者共用同一块 UI，
+   * 但 security 条目不能「修复」，只能说清问题在哪一行。
+   */
+  kind?: 'security'
+  /** security 条目的原始严重度；发现诊断条目省略，统一用上面的 level 呈现。 */
+  severity?: 'block' | 'warn'
+}
+
+/**
+ * 技能目录在 system prompt 里占用的公告预算。渐进加载的第一层只放
+ * name + description，但技能多了这一层本身就会顶到客户端的上限而被截断，
+ * 表现为「装了却不触发」—— 面板必须能看见这个数字。
+ */
+export interface AnnouncementBudget {
+  /** 参与公告的技能数（已启用且 modelInvocable）。 */
+  skills: number
+  /** name + description + whenToUse 的总字符数。 */
+  chars: number
+  /** 粗略 token 估算（按 3 字符/token）。 */
+  approxTokens: number
+  /** 建议预算（字符），超出即 overBudget。 */
+  budget: number
+  overBudget: boolean
+}
+
+/**
+ * 技能目录的建议字符预算。取 8000：这是 Codex 在上下文窗口未知时对初始
+ * 技能清单的硬上限，也是目前公开客户端里最保守的一档。超出后尾部条目会被
+ * 静默丢弃（技能看起来装了，实际不触发）。
+ */
+export const ANNOUNCEMENT_CHAR_BUDGET = 8000
+
+/**
+ * 按「已启用且模型可调用」的技能估算公告成本。只统计一层渐进加载真正注入的
+ * 字段（name + description + whenToUse），不含正文 —— 正文是激活后才载入的，
+ * 不占常驻预算。
+ */
+export function computeAnnouncementBudget(skills: readonly CatalogSkill[]): AnnouncementBudget {
+  let chars = 0
+  let count = 0
+  for (const skill of skills) {
+    if (!skill.invocation.modelInvocable) continue
+    count += 1
+    chars += skill.name.length + skill.description.length + (skill.whenToUse?.length ?? 0)
+  }
+  return {
+    skills: count,
+    chars,
+    approxTokens: Math.ceil(chars / 3),
+    budget: ANNOUNCEMENT_CHAR_BUDGET,
+    overBudget: chars > ANNOUNCEMENT_CHAR_BUDGET,
+  }
+}
+
+/** POST /api/skill-hub/diagnostic/fix — repair a fixable diagnostic in place. */
+export interface DiagnosticFixRequest {
+  path: string
+}
+export interface DiagnosticFixResponse {
+  ok: true
+  path: string
+}
+
+/** GET /api/skill-hub/catalog */
+export interface CatalogResponse {
+  ok: true
+  /** 已安装插件自身的版本号（package.json version），面板标题旁显示。 */
+  pluginVersion: string
+  /** Whether discovery completed within a stable catalog revision. */
+  complete: boolean
+  /** Sorted winning summaries of every enabled skill (all roots + providers). */
+  skills: CatalogSkill[]
+  /** Skills the hub has toggled off (kept outside provider discovery). */
+  disabled: DisabledSkill[]
+  /** Known workspaces (dsh workspace.json); used by the create dialog. */
+  workspaces?: Array<{ path: string; title: string }>
+  /** Graded diagnostics for the writable roots (provider-skipped files + loadable skills with issues). */
+  diagnostics: DiagnosticEntry[]
+  /** 技能目录占用的公告预算（见 AnnouncementBudget）。 */
+  announcement: AnnouncementBudget
+  /** Skill names that appeared in multiple roots (first wins, others hidden). Mirrors codex name_counts. */
+  duplicateNames?: string[]
+}
+
+/** GET /api/skill-hub/skill */
+export interface SkillDetail {
+  name: string
+  description: string
+  whenToUse?: string
+  /** Claude Code 的 `argument-hint`（/name 的参数提示），dsh 不消费，详情里展示。 */
+  argumentHint?: string
+  invocation: HubInvocation
+  provider: string
+  /** Discovery source that produced this winning skill. */
+  source?: string
+  /** Absolute file path when the skill came from disk. */
+  path?: string
+  /** SKILL.md creation time (epoch ms); absent when the file is unreadable. */
+  addedAt?: number
+  /** SKILL.md last-modified time (epoch ms); absent when the file is unreadable. */
+  updatedAt?: number
+  /** Markdown instruction body. */
+  content: string
+  displayName?: string
+  shortDescription?: string
+  brandColor?: string
+  iconSmall?: string
+  iconLarge?: string
+  defaultPrompt?: string
+}
+
+export interface SkillDetailResponse {
+  ok: true
+  skill: SkillDetail
+}
+
+/** POST /api/skill-hub/skill/delete — 把单个技能移入回收站（可恢复）。 */
+export interface SkillDeleteRequest {
+  name: string
+}
+
+/** POST /api/skill-hub/skill/delete */
+export interface SkillDeleteResponse {
+  ok: true
+  name: string
+  /** 移入回收站后的路径（目录或文件）。 */
+  path: string
+}
+
+/** POST /api/skill-hub/toggle */
+export interface ToggleRequest {
+  /** Kebab-case skill name. */
+  name: string
+  /** true re-enables a hub-disabled skill; false disables an enabled one. */
+  enabled: boolean
+  /** Workspace path for project-level skills (passed through as the registry cwd). */
+  cwd?: string
+}
+
+export interface ToggleResponse {
+  ok: true
+  /** Fresh catalog after the mutation (the filesystem provider may lag a beat). */
+  catalog: CatalogResponse
+}
+
+/** POST /api/skill-hub/toggle-batch — one group of skills, one write. */
+export interface ToggleBatchRequest {
+  names: string[]
+  enabled: boolean
+  /** Workspace path when the names belong to one project workspace. */
+  cwd?: string
+}
+
+/** POST /api/skill-hub/toggle-batch */
+export interface ToggleBatchResponse {
+  ok: true
+  catalog: CatalogResponse
+  /** Per-name failures (unknown/read-only skills); empty means all landed. */
+  failures: Array<{ name: string; error: string }>
+}
+
+/** POST /api/skill-hub/create */
+export interface CreateRequest {
+  /** Kebab-case skill name (validated with the official isSkillName grammar). */
+  name: string
+  /** Optional one-line routing description for the frontmatter. */
+  description?: string
+  /** Optional Markdown body written after the frontmatter. */
+  body?: string
+  /** Target user root; defaults to user-dsh (~/.dsh/skills). */
+  root?: WritableRoot
+  /** Target workspace path (absolute); takes precedence over root. */
+  workspace?: string
+}
+
+export interface CreateResponse {
+  ok: true
+  path: string
+  root?: WritableRoot
+  workspace?: string
+}

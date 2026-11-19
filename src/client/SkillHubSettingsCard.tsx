@@ -1,0 +1,209 @@
+/**
+ * The dsh-skill-hub plugin settings card: bridges the hub's settings
+ * namespace (bound through the official settings transport) onto the
+ * family-style staged card form (enabled master switch + agent announcement).
+ * Registered into `plugins.bundle.config` under the bundle's package name, so
+ * the Plugins manager renders it on dsh-skill-hub's own page. That slot is
+ * dispatched with `view: 'page'` only, so the card always renders its full
+ * form (no `summary` one-liner variant).
+ */
+
+import { useEffect, useState, type ReactElement } from 'react'
+import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
+import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import type { UpdateApplyResponse, UpdateCheckResponse } from '../protocol.ts'
+import { SkillHubApi } from './api.ts'
+import { errorMessage, tt } from './helpers.ts'
+import type { HubKey } from './locales.ts'
+import { ColorField, NumberField, PluginSettingsCard, SecretField, SwitchField } from './settings-card.tsx'
+import { booleanField, CardForm, colorField, numberField, secretField, type CardShell, type FieldState, type FormScope } from './settings-form.ts'
+// 复用卡片自己的样式表：更新提示 pill 与版本徽标必须同一套 token 与尺寸。
+import css from './settings-card.module.css'
+// Single source for the TS-side dot defaults (the panel CSS mirrors these).
+import { DEFAULT_DOT_MODEL_COLOR, DEFAULT_DOT_USER_COLOR } from './panel/format.ts'
+
+/** The card's projected state. */
+export interface SkillHubSettingsState extends CardShell {
+  enabled: FieldState
+  announceToAgent: FieldState
+  dotModelColor: FieldState
+  dotUserColor: FieldState
+  showUseCount: FieldState
+  showUseTime: FieldState
+  showGroupSummary: FieldState
+  statsWindowDays: FieldState
+  statsScanMinutes: FieldState
+  githubToken: FieldState
+}
+
+/** The card's editable config fields (every projected key beyond the CardShell). */
+type SkillHubField = Exclude<keyof SkillHubSettingsState, keyof CardShell>
+
+/** One staged field row: which control renders it and the copy keys it uses. */
+type FieldRow =
+  | { kind: 'switch'; field: SkillHubField; label: HubKey; hint: HubKey }
+  | { kind: 'color'; field: SkillHubField; id: string; label: HubKey; hint: HubKey; defaultColor: string }
+  | { kind: 'number'; field: SkillHubField; id: string; label: HubKey; hint: HubKey }
+  | { kind: 'secret'; field: SkillHubField; id: string; label: HubKey; hint: HubKey; placeholder: HubKey }
+
+/** The business face the card's slot registration injects. */
+export interface SkillHubSettingsCardFace {
+  hooks: {
+    /** The card's snapshot store (projected form state). */
+    skillHubSettingsCard: SnapshotStore<SkillHubSettingsState>
+  }
+  save: () => void
+  discard: () => void
+  edit: (field: string, text: string) => void
+  resetField: (field: string) => void
+}
+
+/** Props the slot renderer binds (locale copy + injected form actions). */
+export type SkillHubSettingsCardProps =
+  PropsRuntime<'plugins.bundle.config'> & PropsLocale<'dsh-skill-hub'> & InjectFace<SkillHubSettingsCardFace>
+
+/** Bridges the hub's config scope onto the card's staged form. */
+export class SkillHubSettingsCardController {
+  private readonly form: CardForm
+  private readonly store: SnapshotStore<SkillHubSettingsState>
+
+  /** @param scope - the hub settings scope the card edits (FormScope-compatible). */
+  constructor(scope: FormScope) {
+    this.form = new CardForm(scope, [booleanField('enabled'), booleanField('announceToAgent'), colorField('dotModelColor'), colorField('dotUserColor'), booleanField('showUseCount'), booleanField('showUseTime'), booleanField('showGroupSummary'), numberField('statsWindowDays', { min: 0, max: 3650 }), numberField('statsScanMinutes', { min: 1, max: 1440 }), secretField('githubToken')])
+    this.store = this.form.bind(() => this.projection())
+  }
+
+  private projection(): SkillHubSettingsState {
+    return {
+      ...this.form.shell(),
+      enabled: this.form.field('enabled'),
+      announceToAgent: this.form.field('announceToAgent'),
+      dotModelColor: this.form.field('dotModelColor'),
+      dotUserColor: this.form.field('dotUserColor'),
+      showUseCount: this.form.field('showUseCount'),
+      showUseTime: this.form.field('showUseTime'),
+      showGroupSummary: this.form.field('showGroupSummary'),
+      statsWindowDays: this.form.field('statsWindowDays'),
+      statsScanMinutes: this.form.field('statsScanMinutes'),
+      githubToken: this.form.field('githubToken'),
+    }
+  }
+
+  /**
+   * Build the face the card's slot registration injects.
+   * @returns the card's snapshot hook and its form actions.
+   */
+  inject(): SkillHubSettingsCardFace {
+    return {
+      hooks: { skillHubSettingsCard: this.store },
+      ...this.form.actions(),
+    }
+  }
+}
+
+/** The card's field rows in render order; the rendered DOM order follows it. */
+const FIELD_ROWS: readonly FieldRow[] = [
+  { kind: 'switch', field: 'enabled', label: 'settings.enabled', hint: 'settings.enabledHint' },
+  { kind: 'switch', field: 'announceToAgent', label: 'settings.announceToAgent', hint: 'settings.announceToAgentHint' },
+  { kind: 'color', field: 'dotModelColor', id: 'skill-hub-dot-model-color', label: 'settings.dotModelColor', hint: 'settings.dotModelColorHint', defaultColor: DEFAULT_DOT_MODEL_COLOR },
+  { kind: 'color', field: 'dotUserColor', id: 'skill-hub-dot-user-color', label: 'settings.dotUserColor', hint: 'settings.dotUserColorHint', defaultColor: DEFAULT_DOT_USER_COLOR },
+  { kind: 'switch', field: 'showUseCount', label: 'settings.showUseCount', hint: 'settings.showUseCountHint' },
+  { kind: 'switch', field: 'showUseTime', label: 'settings.showUseTime', hint: 'settings.showUseTimeHint' },
+  { kind: 'switch', field: 'showGroupSummary', label: 'settings.showGroupSummary', hint: 'settings.showGroupSummaryHint' },
+  { kind: 'number', field: 'statsWindowDays', id: 'skill-hub-stats-window-days', label: 'settings.statsWindowDays', hint: 'settings.statsWindowDaysHint' },
+  { kind: 'number', field: 'statsScanMinutes', id: 'skill-hub-stats-scan-minutes', label: 'settings.statsScanMinutes', hint: 'settings.statsScanMinutesHint' },
+  { kind: 'secret', field: 'githubToken', id: 'skill-hub-github-token', label: 'settings.githubToken', hint: 'settings.githubTokenHint', placeholder: 'settings.githubTokenPlaceholder' },
+]
+
+/**
+ * Render the dsh-skill-hub card.
+ * @param props - locale copy, the card snapshot, and its form actions.
+ * @returns the card.
+ */
+export function SkillHubSettingsCard(props: SkillHubSettingsCardProps): ReactElement {
+  const { t } = props
+  const state = props.useSkillHubSettingsCard((snapshot) => snapshot)
+  // 插件自身版本：挂载时从 config 路由取一次（与面板标题徽标同源），失败静默不显示。
+  const [version, setVersion] = useState<string | undefined>(undefined)
+  // 更新状态：服务端缓存 10 分钟，所以「打开设置页」最多一次本地请求，
+  // 不会因为反复进设置页把 registry / GitHub 打满。
+  const [update, setUpdate] = useState<UpdateCheckResponse | null>(null)
+  // 一键更新：进行中的状态与结果都留在本地 —— 它不进配置表单，不该被「保存/放弃」影响。
+  const [applying, setApplying] = useState(false)
+  const [applyOutcome, setApplyOutcome] = useState<UpdateApplyResponse | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    const api = new SkillHubApi()
+    void api.config()
+      .then((res) => { if (!cancelled && res.ok) setVersion(res.pluginVersion) })
+      .catch(() => { /* 版本徽标是装饰性的，失败不提示 */ })
+    void api.updateCheck()
+      .then((res) => { if (!cancelled) setUpdate(res) })
+      .catch(() => { /* 检查失败不打扰：面板「⋯ → 检查更新」仍可手动重试 */ })
+    return () => { cancelled = true }
+  }, [])
+  const runUpdate = (target: string): void => {
+    if (applying) return
+    setApplying(true)
+    setApplyOutcome(null)
+    void new SkillHubApi().applyUpdate(target)
+      .then((result) => { setApplyOutcome(result) })
+      .catch((error: unknown) => {
+        // 网络/超时是拒绝（Promise reject），与「服务端说不行」分开处理，但都用同一种展示。
+        setApplyOutcome({ ok: true, appliedVersion: null, restartRequired: false, installKind: 'development', error: errorMessage(error) })
+      })
+      .finally(() => { setApplying(false) })
+  }
+  // 标题行的更新区：待重启 > 进行中 > 失败 > 有新版本。一次只显示一种，
+  // 标题行空间有限，堆两种状态会看不清当前到底发生了什么。
+  const versionExtra = ((): ReactElement | undefined => {
+    const pending = applyOutcome?.appliedVersion ?? update?.pendingRestartVersion
+    if (pending !== undefined) return <span className={css.updateTag}>{tt('update.pendingRestart', { version: pending })}</span>
+    if (applying) return <span className={css.updateTag}>{tt('update.applying')}</span>
+    if (applyOutcome?.error !== undefined) {
+      return <span className={css.updateTag + ' ' + css.updateTagFailed} title={tt('update.applyFailedHint', { error: applyOutcome.error })}>{tt('update.applyFailed')}</span>
+    }
+    const target = update?.updateAvailable === true ? update.latestVersion : null
+    if (target === null || target === undefined) return undefined
+    return (
+      <>
+        {update?.url != null ? <a className={css.updateTag} href={update.url} target='_blank' rel='noreferrer'>{tt('update.newVersion', { version: target })}</a> : null}
+        <button type='button' className={css.updateApply} onClick={() => { runUpdate(target) }}>{tt('update.apply')}</button>
+      </>
+    )
+  })()
+  const disabled = !state.writable
+  const fieldProps = {
+    overriddenLabel: t('settings.overridden'),
+    resetLabel: t('settings.reset'),
+    disabled,
+  }
+  return (
+    <PluginSettingsCard
+      t={t}
+      titleKey='settings.title'
+      descriptionKey='settings.description'
+      version={version}
+      versionExtra={versionExtra}
+      state={state}
+      onSave={props.save}
+      onDiscard={props.discard}
+    >
+      {FIELD_ROWS.map((row) => {
+        const value = state[row.field]
+        const common = {
+          label: t(row.label),
+          hint: t(row.hint),
+          ...fieldProps,
+          ...value,
+          onEdit: (text: string) => { props.edit(row.field, text) },
+          onReset: () => { props.resetField(row.field) },
+        }
+        if (row.kind === 'switch') return <SwitchField key={row.field} {...common} />
+        if (row.kind === 'color') return <ColorField key={row.field} {...common} id={row.id} inheritLabel={t('settings.inherit')} defaultColor={row.defaultColor} />
+        if (row.kind === 'number') return <NumberField key={row.field} {...common} id={row.id} inheritLabel={t('settings.inherit')} />
+        return <SecretField key={row.field} {...common} id={row.id} placeholder={t(row.placeholder)} />
+      })}
+    </PluginSettingsCard>
+  )
+}

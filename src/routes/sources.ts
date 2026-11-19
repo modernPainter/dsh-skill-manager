@@ -1,0 +1,440 @@
+/**
+ * 来源跟踪域路由：sources 列表 / check 上游更新 / sync 同步 / delete 跟进
+ * 删除 / restore 恢复 / trash/clear 清空回收站。从 routes.ts 原样搬出，
+ * handler 逻辑不变。
+ */
+
+import { mkdir, readdir, rm } from 'node:fs/promises'
+import { join } from 'node:path'
+import { isSkillName } from '@deepseek-ai/dsh-skill'
+import {
+  SKILL_HUB_API,
+  type SourceCheckResponse,
+  type SourceCheckResult,
+  type SourceDeleteResponse,
+  type SourceRestoreResponse,
+  type SourceSyncResponse,
+  type SourcesResponse,
+  type SourceTrashClearResponse,
+} from '../protocol.ts'
+import {
+  collectRepoSkillFiles,
+  diffRemoteSkills,
+  downloadRepoSkill,
+  getLatestCommit,
+  loadRepoTreeAt,
+  normalizeRepoInput,
+  repoSkillEntry,
+  repoSlug,
+  skillDirOf,
+  skillFileAt,
+  skillManifest,
+} from '../repo.ts'
+import { clearTrash, hashSkillAt, occupancyOf, restoreSkill, rootOfPath, rootPath, trashSkill, trashSourceOf, WRITABLE_ROOTS } from '../skillfs.ts'
+import { errorText } from '../error-text.ts'
+import { mapConcurrent } from '../concurrency.ts'
+import {
+  buildCollections,
+  homeOf,
+  pathExists,
+  readString,
+  readStrings,
+  writeError,
+  writeJson,
+  type RouteSpec,
+  type SkillHubRouteDeps,
+} from './helpers.ts'
+import { MIN_CHECK_INTERVAL_MS, lastSourceCheck, replaceInPlace, retireNamePlaceholders } from './route-state.ts'
+
+/**
+ * 本地被改过的技能：磁盘内容哈希 ≠ 导入/同步时记录的哈希。
+ *
+ * 只对「记录里已有哈希」的技能判定 —— 旧记录没采集过哈希，硬比会得到
+ * 「全部已改」的假警报。技能目录读不到（被删/被移走）同样不算改过：
+ * 那是另一种状态，由发现诊断去报。
+ */
+async function localModifiedSkills(source: { skills: readonly string[]; localHashes?: Record<string, string> }, home: string): Promise<string[]> {
+  const hashes = source.localHashes
+  if (hashes === undefined || Object.keys(hashes).length === 0) return []
+  const base = rootPath('user-dsh', home)
+  const modified: string[] = []
+  // 有界并发，与 scanDiagnostics 同一理由：一个来源可能跟踪几十个技能，
+  // 裸 Promise.all 会同时打开上百个文件句柄。
+  await mapConcurrent(source.skills, 8, async (name) => {
+    const expected = hashes[name]
+    if (expected === undefined) return
+    const occupancy = await occupancyOf(base, name)
+    const path = occupancy.enabled[0]
+    if (path === undefined) return
+    const actual = await hashSkillAt(path)
+    if (actual !== undefined && actual !== expected) modified.push(name)
+  })
+  return modified.sort((a, b) => a.localeCompare(b))
+}
+
+/** 来源跟踪域全部路由 spec（由 routes.ts 经 createRoute 包上统一围栏）。 */
+export function sourceRoutes(deps: SkillHubRouteDeps): RouteSpec[] {
+  return [
+    // ------------------------------------------------------------- sources
+    // 来源列表 + 派生 origin 映射 + 集合组 + 回收站。
+    {
+      path: SKILL_HUB_API.sources,
+      methods: ['GET'],
+      handler: async ({ res }) => {
+        const [sources, origins, trash, collectionOrder] = await Promise.all([deps.store.listSources(), deps.store.listOrigins(), deps.store.listTrash(), deps.store.getCollectionOrder()])
+        writeJson(res, 200, { ok: true, sources, origins, collections: buildCollections(origins, collectionOrder), trash } satisfies SourcesResponse)
+      },
+    },
+    // -------------------------------------------------------- sources/check
+    // 检查指定（或全部）来源的上游更新。每个来源最多 1 次 commit 请求；
+    // 仅当 commit 变化时再拉一次 tree 做逐技能差异。5 分钟节流。
+    {
+      path: SKILL_HUB_API.sourceCheck,
+      methods: ['POST'],
+      jsonBody: true,
+      handler: async ({ res, body }) => {
+        const rawRepo = readString(body, 'repo')
+        let only: string | undefined
+        if (rawRepo !== '') {
+          // Normalize URLs/slugs the same way every other route does, so a
+          // check for "https://github.com/a/b" finds the "a/b" record.
+          const parsedOnly = normalizeRepoInput(rawRepo)
+          if (parsedOnly === null) { writeError(res, 400, 'repo must be owner/repo or a github.com URL'); return }
+          only = repoSlug(parsedOnly)
+        }
+        const source = only !== undefined ? await deps.store.getSource(only) : undefined
+        if (only !== undefined && source === undefined) { writeError(res, 404, 'source not found: ' + only); return }
+        const sources = source !== undefined ? [source] : await deps.store.listSources()
+        if (lastSourceCheck.size > 500) lastSourceCheck.clear()
+        const home = homeOf(deps)
+        const results: SourceCheckResult[] = []
+        for (const item of sources) {
+          // 本地改动是磁盘事实，与网络检查成败无关，所以放在节流判断之前。
+          const modified = await localModifiedSkills(item, home)
+          const base = {
+            repo: item.repo,
+            ...(item.ref !== undefined ? { ref: item.ref } : {}),
+            ...(modified.length > 0 ? { localModified: modified } : {}),
+          }
+          const now = Date.now()
+          const last = lastSourceCheck.get(item.repo) ?? 0
+          if (now - last < MIN_CHECK_INTERVAL_MS) {
+            results.push({ ...base, changed: false, updated: [], deleted: [], throttled: true })
+            continue
+          }
+          try {
+            const latest = await getLatestCommit(item.repo, item.ref)
+            if (item.commitSha === '') {
+              // Migrated/legacy record without a snapshot: backfill the
+              // commit now and report "unverified" instead of claiming every
+              // skill is updated (there is no baseline to diff against yet).
+              await deps.store.setSourceCommit(item.repo, latest.commitSha)
+              lastSourceCheck.set(item.repo, now)
+              results.push({ ...base, changed: false, updated: [], deleted: [], unverified: true, commitSha: latest.commitSha })
+              continue
+            }
+            if (latest.commitSha === item.commitSha) {
+              lastSourceCheck.set(item.repo, now)
+              results.push({ ...base, changed: false, updated: [], deleted: [] })
+              continue
+            }
+            const tree = await loadRepoTreeAt(item.repo, latest.treeSha)
+            const diff = diffRemoteSkills(tree, item)
+            // Only a fully successful check starts the throttle window: a
+            // failed tree/download must be retryable immediately.
+            lastSourceCheck.set(item.repo, now)
+            results.push({ ...base, changed: true, commitSha: latest.commitSha, updated: diff.updated, deleted: diff.deleted })
+          } catch (error) {
+            results.push({ ...base, changed: false, updated: [], deleted: [], error: errorText(error) })
+          }
+        }
+        writeJson(res, 200, { ok: true, results } satisfies SourceCheckResponse)
+      },
+    },
+    // --------------------------------------------------------- sources/sync
+    // 按上游重新下载所选（或全部）技能并更新 commit 快照与 manifest。
+    {
+      path: SKILL_HUB_API.sourceSync,
+      methods: ['POST'],
+      jsonBody: true,
+      handler: async ({ res, body }) => {
+        const repo = readString(body, 'repo').trim()
+        if (repo === '') { writeError(res, 400, 'repo is required'); return }
+        // 未传 skills（不是数组）表示"全部"，空数组表示"一个都不选"。
+        const selected = Array.isArray(body.skills) ? readStrings(body, 'skills') : undefined
+        const source = await deps.store.getSource(repo)
+        if (source === undefined) { writeError(res, 404, 'source not found: ' + repo); return }
+        const targets = selected !== undefined ? selected : source.skills
+        const latest = await getLatestCommit(repo, source.ref)
+        const tree = await loadRepoTreeAt(repo, latest.treeSha)
+        const targetRoot = rootPath('user-dsh', homeOf(deps))
+        await mkdir(targetRoot, { recursive: true })
+        const synced: string[] = []
+        const overwritten: string[] = []
+        const failed: Array<{ name: string; error: string }> = []
+        for (const name of targets) {
+          // Sync writes under the user root: only accept real skill names
+          // this source actually tracks (a bare join would otherwise fold
+          // `..` segments out of the writable root).
+          if (!isSkillName(name) || !source.skills.includes(name)) {
+            failed.push({ name, error: 'skill is not tracked by this source' })
+            continue
+          }
+          try {
+            const entry = repoSkillEntry(name, source.root, repo)
+            // 上游可能用分类子目录（skills/engineering/<name>/）且目录会移动：
+            // 先在上游 tree 里搜真实位置，manifest 兜底，否则嵌套技能会 404。
+            entry.dir = skillDirOf(source, name, tree.map((item) => item.path))
+            entry.path = skillFileAt(entry.dir)
+            const files = collectRepoSkillFiles(tree, entry.dir)
+            if (files.length === 0) { failed.push({ name, error: 'skill missing upstream' }); continue }
+            const targetDir = join(targetRoot, name)
+            const record = await deps.store.getDisabled(name)
+            const occupancy = await occupancyOf(targetRoot, name)
+            // 落盘位置永远是目录包，所以本地无论是目录包还是扁平文件（启用或禁用）
+            // 都得先让开，否则同名两形态会并存（issue #16 类）。
+            const download = () => downloadRepoSkill(repo, latest.commitSha, entry, files, targetRoot)
+            // 覆盖前的如实上报：本地内容与记录不符时，这次同步会丢掉用户的改动。
+            // 是否继续由调用方（GUI 确认弹窗）决定，这里只负责不隐瞒。
+            const expectedHash = source.localHashes?.[name]
+            const localPath = occupancy.enabled[0]
+            if (expectedHash !== undefined && localPath !== undefined) {
+              const actualHash = await hashSkillAt(localPath)
+              if (actualHash !== undefined && actualHash !== expectedHash) overwritten.push(name)
+            }
+            // 1) 禁用件与空壳让位（顺带清掉 sidecar 禁用记录）。
+            await retireNamePlaceholders(deps, targetRoot, name)
+            // 2) 启用件按「替换」语义处理：先挪到点前缀备份，下载失败则原样恢复。
+            const enabled = occupancy.enabled[0]
+            if (enabled !== undefined) {
+              await replaceInPlace(trashSourceOf(enabled), download)
+            } else {
+              await download()
+            }
+            // 同步后保持停用状态：只重写策略，不再把新的 SKILL.md 改名成
+            // SKILL.md.disabled（第一轮重构后停用不碰磁盘文件）。
+            // 记录必须**无条件写回** —— 上面的 retireNamePlaceholders 可能已经
+            // 删过一遍，漏写会让「同步一个已停用的技能」悄悄复活。
+            const policyPath = join(targetDir, 'SKILL.md')
+            if (record !== undefined) {
+              await deps.store.addInvocationOverride(policyPath)
+              await deps.store.addDisabled({ ...record, path: policyPath })
+            } else {
+              await deps.store.removeInvocationOverride(policyPath)
+              await deps.store.removeDisabled(name)
+            }
+            await deps.store.mergeSourceManifest(repo, skillManifest(tree, entry.dir), entry.dir)
+            // 落盘后的实际内容才是新基线；停用已不再改文件名，只认启用态发现文件。
+            const settled = await occupancyOf(targetRoot, name)
+            const settledPath = settled.enabled[0]
+            if (settledPath !== undefined) {
+              const hash = await hashSkillAt(settledPath)
+              if (hash !== undefined) await deps.store.setSourceSkillHash(repo, name, hash)
+            }
+            synced.push(name)
+          } catch (error) {
+            failed.push({ name, error: errorText(error) })
+          }
+        }
+        // Only advance the commit snapshot when the full tracked set is clean
+        // against the target tree. A partial selection (or an empty one) must
+        // leave the old baseline so the next check still reports the skills
+        // that were not synced. The response reports the committed value
+        // actually in the store, not the upstream latest.
+        if (failed.length === 0 && targets.length > 0) {
+          const current = await deps.store.getSource(repo)
+          const remaining = current !== undefined ? diffRemoteSkills(tree, current) : { updated: [], deleted: [] }
+          if (remaining.updated.length === 0 && remaining.deleted.length === 0) {
+            await deps.store.setSourceCommit(repo, latest.commitSha)
+          }
+        }
+        // The disk changed during this request; the old 5-minute throttle
+        // would otherwise hide the next check behind stale state.
+        lastSourceCheck.delete(repo)
+        deps.invalidate?.()
+        const settled = await deps.store.getSource(repo)
+        writeJson(res, 200, { ok: true, repo, commitSha: settled?.commitSha ?? source.commitSha, synced, ...(overwritten.length > 0 ? { overwritten } : {}), failed } satisfies SourceSyncResponse)
+      },
+    },
+    // ------------------------------------------------------- sources/delete
+    // 跟进上游删除：把所选技能的本地目录移入回收站（可恢复）。
+    {
+      path: SKILL_HUB_API.sourceDelete,
+      methods: ['POST'],
+      jsonBody: true,
+      handler: async ({ res, body }) => {
+        const repo = readString(body, 'repo').trim()
+        const skills = readStrings(body, 'skills')
+        if (repo === '') { writeError(res, 400, 'repo is required'); return }
+        if (skills.length === 0) { writeError(res, 400, 'skills must be a non-empty array'); return }
+        const source = await deps.store.getSource(repo)
+        if (source === undefined) { writeError(res, 404, 'source not found: ' + repo); return }
+        const home = homeOf(deps)
+        const trashed: string[] = []
+        const failed: Array<{ name: string; error: string }> = []
+        const sourceNames = new Set(source.skills)
+        for (const name of skills) {
+          // Every name must be a real kebab-case skill that this source
+          // actually tracks; anything else must never touch the filesystem
+          // (a bare `join` would otherwise fold `..` segments out of the
+          // writable root — see the path-containment assert below).
+          if (!isSkillName(name) || !sourceNames.has(name)) {
+            failed.push({ name, error: 'skill is not tracked by this source' })
+            continue
+          }
+          // Resolve the on-disk occupation instead of assuming a `<root>/<name>`
+          // directory: the tracked skill can equally be a flat `<name>.md` file.
+          // A paused skill keeps its discovery file, so `enabled[0]` covers it too.
+          const base = rootPath('user-dsh', home)
+          const occupancy = await occupancyOf(base, name)
+          const existing = occupancy.enabled[0] ?? occupancy.bareDir
+          if (existing === undefined) {
+            failed.push({ name, error: 'skill not found on disk' })
+            continue
+          }
+          if (rootOfPath(existing, home) === undefined) {
+            failed.push({ name, error: 'skill path is outside the hub writable roots' })
+            continue
+          }
+          try {
+            // 入回收站前快照来源与角色归属，恢复时挂回（见 sourceRestore）。
+            const tagIds = (await deps.store.listTags()).filter((tag) => tag.skillNames.includes(name)).map((tag) => tag.id)
+            const { path, source: trashSource } = await trashSkill(existing)
+            await deps.store.addTrash({
+              name,
+              path,
+              movedAt: Date.now(),
+              sourcePath: trashSource,
+              origin: { repo: source.repo, root: source.root, ...(source.ref !== undefined && source.ref !== '' ? { ref: source.ref } : {}), commitSha: source.commitSha },
+              ...(tagIds.length > 0 ? { tagIds } : {}),
+            })
+            await deps.store.removeDisabled(name)
+            await deps.store.removeSkillFromTags(name)
+            trashed.push(name)
+          } catch (error) {
+            failed.push({ name, error: errorText(error) })
+          }
+        }
+        if (trashed.length > 0) {
+          await deps.store.setSourceSkills(repo, source.skills.filter((n) => !trashed.includes(n)))
+          // 跟进删除后，被删技能已从 source.skills 移除；如果其余技能都已
+          // 对齐目标 tree，就把 commit 基线推进到最新。否则下一次检查会因
+          // commit 不同却既无 updated 也无 deleted，永久显示「有更新」空徽章。
+          try {
+            const latest = await getLatestCommit(repo, source.ref)
+            const tree = await loadRepoTreeAt(repo, latest.treeSha)
+            const current = await deps.store.getSource(repo)
+            if (current !== undefined) {
+              const remaining = diffRemoteSkills(tree, current)
+              if (remaining.updated.length === 0 && remaining.deleted.length === 0) {
+                await deps.store.setSourceCommit(repo, latest.commitSha)
+              }
+            }
+          } catch {
+            // 删除本身已成功；基线推进失败时下次检查会重新尝试。
+          }
+          lastSourceCheck.delete(repo)
+          deps.invalidate?.()
+        }
+        writeJson(res, 200, { ok: true, trashed, failed } satisfies SourceDeleteResponse)
+      },
+    },
+    // ------------------------------------------------------ sources/restore
+    // 从回收站恢复一个技能目录。
+    {
+      path: SKILL_HUB_API.sourceRestore,
+      methods: ['POST'],
+      jsonBody: true,
+      handler: async ({ res, body }) => {
+        const name = readString(body, 'name')
+        if (name === '') { writeError(res, 400, 'name is required'); return }
+        const entry = await deps.store.getTrash(name)
+        if (entry === undefined) { writeError(res, 404, 'trash entry not found: ' + name); return }
+        const home = homeOf(deps)
+        const target = entry.sourcePath ?? join(rootPath('user-dsh', home), name)
+        if (await pathExists(target)) {
+          writeError(res, 409, 'skill already exists: ' + name)
+          return
+        }
+        const path = await restoreSkill(entry, home)
+        // 恢复来源归属（入回收站前快照的来源记录）与角色成员，否则恢复后
+        // 的技能会变成「个人技能」并脱离原角色。
+        if (entry.origin !== undefined) {
+          await deps.store.addSourceSkill(entry.origin.repo, entry.origin.root, entry.origin.commitSha, entry.origin.ref, name)
+        }
+        for (const tagId of entry.tagIds ?? []) {
+          await deps.store.addSkillToTag(tagId, name)
+        }
+        await deps.store.removeTrash(entry.path)
+        deps.invalidate?.()
+        writeJson(res, 200, { ok: true, name, path } satisfies SourceRestoreResponse)
+      },
+    },
+    // ------------------------------------------------- sources/trash/clear
+    // 清空回收站：永久删除 .trash 里的技能，失败项保留可重试。
+    {
+      path: SKILL_HUB_API.sourceTrashClear,
+      methods: ['POST'],
+      handler: async ({ res }) => {
+        const home = homeOf(deps)
+        const entries = await deps.store.listTrash()
+        const deleted: string[] = []
+        const removedPaths: string[] = []
+        const failed: Array<{ name: string; error: string }> = []
+        for (const entry of entries) {
+          try {
+            await clearTrash(entry, home)
+            // A permanently deleted skill must not linger in user groups.
+            await deps.store.removeSkillFromTags(entry.name)
+            deleted.push(entry.name)
+            removedPaths.push(entry.path)
+          } catch (error) {
+            failed.push({ name: entry.name, error: errorText(error) })
+          }
+        }
+        for (const path of removedPaths) await deps.store.removeTrash(path)
+        // 回收站记录按名字索引：同名技能先后两次入站时旧记录被覆盖，但它的
+        // `<name>-<时间戳>` 目录还留在盘上，任何记录都指不到它 → 永久孤儿。
+        // 「清空回收站」正是它的回收时机，顺手扫掉并如实上报。
+        const orphans = await sweepOrphanTrash(deps, home, failed)
+        if (deleted.length > 0 || orphans.length > 0) deps.invalidate?.()
+        writeJson(res, 200, {
+          ok: true,
+          deleted,
+          failed,
+          ...(orphans.length > 0 ? { orphans } : {}),
+        } satisfies SourceTrashClearResponse)
+      },
+    },
+  ]
+}
+
+/**
+ * 删除两个可写根 `.trash` 下不被任何回收站记录引用的残留目录。
+ * 只扫 `.trash` 的直接子项、跳过点开头项，失败项并入 `failed`（保留可重试）。
+ */
+async function sweepOrphanTrash(deps: SkillHubRouteDeps, home: string, failed: Array<{ name: string; error: string }>): Promise<string[]> {
+  const referenced = new Set((await deps.store.listTrash()).map((entry) => entry.path))
+  const orphans: string[] = []
+  for (const root of WRITABLE_ROOTS) {
+    const trashDir = join(rootPath(root, home), '.trash')
+    let names: string[]
+    try {
+      names = await readdir(trashDir)
+    } catch {
+      continue // 该根没有回收站目录
+    }
+    for (const name of names) {
+      if (name.startsWith('.')) continue
+      const full = join(trashDir, name)
+      if (referenced.has(full)) continue
+      try {
+        await rm(full, { recursive: true, force: true })
+        orphans.push(full)
+      } catch (error) {
+        failed.push({ name, error: errorText(error) })
+      }
+    }
+  }
+  return orphans
+}
