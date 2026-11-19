@@ -43,6 +43,16 @@ export function IconTrashOutline16({ size = 16, className }: IconProps): JSX.Ele
   )
 }
 
+/** ic_ds_copy_outline_16（复制：叠放的两张纸） */
+export function IconCopyOutline16({ size = 16, className }: IconProps): JSX.Element {
+  return (
+    <svg width={size} height={size} className={className} viewBox='0 0 16 16' fill='none' xmlns='http://www.w3.org/2000/svg'>
+      <rect x='5.6' y='1.6' width='8.8' height='8.8' rx='1.6' stroke='currentColor' strokeWidth='1.2' />
+      <path d='M10.4 11.2V12.8C10.4 13.68 9.68 14.4 8.8 14.4H3.2C2.32 14.4 1.6 13.68 1.6 12.8V7.2C1.6 6.32 2.32 5.6 3.2 5.6H4.8' stroke='currentColor' strokeWidth='1.2' strokeLinecap='round' />
+    </svg>
+  )
+}
+
 /** ic_ds_skill_outline_16 */
 export function IconSkillOutline16({ size = 16, className }: IconProps): JSX.Element {
   return (

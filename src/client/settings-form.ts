@@ -118,9 +118,9 @@ export interface FieldState {
 export interface FormScope {
   subscribe(listener: () => void): () => void
   getSnapshot(): { status: string; writable: boolean; value?: Record<string, unknown>; base?: unknown; user?: unknown }
-  /** Both write paths report host acceptance (ConfigForm.set/unset contract). */
-  set(field: string, value: unknown): Promise<boolean>
-  unset(field: string): Promise<boolean>
+  /** Both write paths settle after the Host write/recovery cycle completes. */
+  set(field: string, value: unknown): Promise<unknown>
+  unset(field: string): Promise<unknown>
 }
 
 /** Stages one card's edits and writes them through the settings transport. */

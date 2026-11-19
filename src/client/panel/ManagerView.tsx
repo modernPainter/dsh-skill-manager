@@ -21,13 +21,13 @@ import {
 } from '../manager-api.ts'
 
 export interface ManagerViewProps {
+  /** 当前页签：仓库管理或场景备份（一级 tab 已拆分，这里只渲染其一）。 */
+  section: 'repos' | 'scenes'
   /** 当前已安装技能名，用于上传与场景创建的选择器。 */
   skills: string[]
   /** 安装/恢复成功后刷新目录。 */
   onChanged: () => void
 }
-
-type SubTab = 'repos' | 'scenes'
 
 interface PendingConfirm {
   title: string
@@ -47,6 +47,34 @@ const list: React.CSSProperties = { listStyle: 'none', margin: 0, padding: 0 }
 const item: React.CSSProperties = { ...box, marginBottom: 8 }
 const banner: React.CSSProperties = { ...box, borderColor: '#d9534f', color: '#a12f2b' }
 const success: React.CSSProperties = { ...box, borderColor: '#2e7d32', color: '#2e7d32' }
+/** 扫描结果卡片网格：一个技能一张卡，点卡片上的「安装」即装到本地技能库。 */
+const cardGrid: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 10, marginTop: 10 }
+const card: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 6,
+  minHeight: 110,
+  padding: 10,
+  border: '1px solid var(--dsh-border, #d9d9d9)',
+  borderRadius: 10,
+}
+const badge: React.CSSProperties = {
+  padding: '0 6px',
+  border: '1px solid var(--dsh-border, #d9d9d9)',
+  borderRadius: 999,
+  fontSize: 11,
+  opacity: 0.8,
+}
+const desc: React.CSSProperties = {
+  display: '-webkit-box',
+  WebkitLineClamp: 2,
+  WebkitBoxOrient: 'vertical',
+  overflow: 'hidden',
+  fontSize: 12,
+  lineHeight: '17px',
+  opacity: 0.75,
+}
+const path: React.CSSProperties = { fontSize: 11, opacity: 0.55, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
 
 /** 同步结果摘要：具体列出变化的技能名（超过 6 个时折叠）。 */
 function describeDiff(diff: SkillDiff): string {
@@ -60,12 +88,10 @@ function describeDiff(diff: SkillDiff): string {
 }
 
 export function ManagerView(props: ManagerViewProps): React.JSX.Element {
-  const [subTab, setSubTab] = useState<SubTab>('repos')
   const [repos, setRepos] = useState<GitRepoSource[]>([])
   const [auths, setAuths] = useState<GitAuthRef[]>([])
   const [scenes, setScenes] = useState<SceneManifest[]>([])
   const [sceneRemotes, setSceneRemotes] = useState<Record<string, SceneRemoteRef>>({})
-  const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [pending, setPending] = useState<PendingConfirm | null>(null)
@@ -84,7 +110,6 @@ export function ManagerView(props: ManagerViewProps): React.JSX.Element {
   }, [])
 
   const refresh = useCallback(async (): Promise<void> => {
-    setLoading(true)
     setError(null)
     try {
       const payload = await managerApi.listRepos()
@@ -95,8 +120,6 @@ export function ManagerView(props: ManagerViewProps): React.JSX.Element {
       // 离线：仓库配置读不到时给出明确提示，但仍尝试展示本地场景。
       setError(errorMessage(caught))
       await loadScenes()
-    } finally {
-      setLoading(false)
     }
   }, [loadScenes])
 
@@ -121,16 +144,13 @@ export function ManagerView(props: ManagerViewProps): React.JSX.Element {
   return (
     <div>
       <div style={{ ...row, marginBottom: 12 }}>
-        <button type='button' style={subTab === 'repos' ? primary : button} onClick={() => { setSubTab('repos') }}>仓库</button>
-        <button type='button' style={subTab === 'scenes' ? primary : button} onClick={() => { setSubTab('scenes') }}>场景备份</button>
-        <span style={{ flex: 1 }} />
-        <button type='button' style={button} disabled={loading || busy !== null} onClick={() => { void refresh() }}>{loading ? '刷新中…' : '刷新'}</button>
+        <span style={muted}>{props.section === 'repos' ? '管理自有 Git 技能仓库：同步、下载与上传' : '把一组技能打成快照，备份到仓库或按需恢复'}</span>
       </div>
 
       {error !== null ? <div style={banner} role='alert'>{error}</div> : null}
       {notice !== null ? <div style={success} role='status'>{notice}</div> : null}
 
-      {subTab === 'repos'
+      {props.section === 'repos'
         ? <ReposSection
             repos={repos}
             auths={auths}
@@ -200,7 +220,6 @@ function ReposSection(props: SectionProps): React.JSX.Element {
 
   const [activeSlug, setActiveSlug] = useState<string | null>(null)
   const [scan, setScan] = useState<{ skills: readonly RepoSkillManifestEntry[]; commitSha: string; ref: string; source: string } | null>(null)
-  const [selected, setSelected] = useState<Set<string>>(new Set())
   const [overwrite, setOverwrite] = useState(false)
   const [allowLocalOverwrite, setAllowLocalOverwrite] = useState(false)
   const [installProgress, setInstallProgress] = useState<InstallProgress | null>(null)
@@ -237,18 +256,17 @@ function ReposSection(props: SectionProps): React.JSX.Element {
   const doScan = async (repo: GitRepoSource): Promise<void> => {
     setActiveSlug(repo.slug)
     setScan(null)
-    setSelected(new Set())
     const result = await managerApi.scanRepo(repo.slug)
     setScan({ skills: result.skills, commitSha: result.commitSha, ref: result.ref, source: repo.slug })
-    setSelected(new Set(result.skills.map((entry) => entry.name)))
   }
 
-  const startInstall = async (): Promise<void> => {
-    if (activeRepo === undefined || scan === null) return
+  /** 安装指定的技能集合；单张卡片安装与「全部安装」共用这条路径。 */
+  const startInstall = async (names: string[]): Promise<void> => {
+    if (activeRepo === undefined || scan === null || names.length === 0) return
     const job = await managerApi.install({
       slug: activeRepo.slug,
       ref: scan.ref,
-      names: [...selected],
+      names,
       ...(overwrite ? { overwrite: true } : { allowLocalOverwrite }),
     })
     setInstallProgress({
@@ -365,43 +383,50 @@ function ReposSection(props: SectionProps): React.JSX.Element {
             <button
               type='button'
               style={primary}
-              disabled={props.busy !== null || selected.size === 0}
+              disabled={props.busy !== null || scan.skills.length === 0 || installProgress?.status === 'running'}
               onClick={() => {
                 props.confirm({
-                  title: '安装所选技能',
-                  message: `从 ${scan.source} 安装 ${selected.size} 个技能；同名技能${overwrite ? '将被覆盖（原版本进回收站）' : '会被跳过'}。`,
+                  title: '安装全部技能',
+                  message: `从 ${scan.source} 安装 ${scan.skills.length} 个技能；同名技能${overwrite ? '将被覆盖（原版本进回收站）' : '会被跳过'}。`,
                   confirmLabel: '开始安装',
-                  run: async () => { await props.run('install', startInstall) },
+                  run: async () => { await props.run('install', async () => { await startInstall(scan.skills.map((entry) => entry.name)) }) },
                 })
               }}
-            >下载 {selected.size} 个</button>
+            >全部安装</button>
           </div>
 
           {scan.skills.length === 0 ? <p style={muted}>该分支下没有发现技能目录（需要 `&lt;name&gt;/SKILL.md` 或 manifest 条目）。</p> : null}
-          <ul style={{ ...list, marginTop: 8, maxHeight: 260, overflow: 'auto' }}>
-            {scan.skills.map((entry) => (
-              <li key={entry.name} style={{ padding: '3px 0' }}>
-                <label style={{ fontSize: 13 }}>
-                  <input
-                    type='checkbox'
-                    checked={selected.has(entry.name)}
-                    onChange={(event) => {
-                      setSelected((previous) => {
-                        const next = new Set(previous)
-                        if (event.target.checked) next.add(entry.name)
-                        else next.delete(entry.name)
-                        return next
-                      })
-                    }}
-                  />
-                  {' '}{entry.name}
-                  {entry.version !== undefined ? <span style={muted}> v{entry.version}</span> : null}
-                  <span style={muted}> · {entry.path}</span>
-                  {entry.description !== undefined ? <span style={muted}> · {entry.description}</span> : null}
-                </label>
-              </li>
-            ))}
-          </ul>
+          <div style={cardGrid}>
+            {scan.skills.map((entry) => {
+              const installed = props.skills.includes(entry.name)
+              return (
+                <div key={entry.name} style={card}>
+                  <div style={{ ...row, gap: 6 }}>
+                    <strong style={{ fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entry.name}</strong>
+                    {entry.version !== undefined ? <span style={badge}>v{entry.version}</span> : null}
+                    {installed ? <span style={badge}>已安装</span> : null}
+                  </div>
+                  <div style={desc}>{entry.description ?? '（manifest 未提供描述）'}</div>
+                  <div style={path} title={entry.path}>{entry.path}</div>
+                  <div style={{ ...row, gap: 6, marginTop: 'auto' }}>
+                    <button
+                      type='button'
+                      style={primary}
+                      disabled={props.busy !== null || installProgress?.status === 'running'}
+                      onClick={() => {
+                        props.confirm({
+                          title: '安装技能 ' + entry.name,
+                          message: `从 ${scan.source} 安装 ${entry.name}${installed ? (overwrite ? '，覆盖本地同名技能（原版本进回收站）' : '，本地已存在，将跳过') : ''}。`,
+                          confirmLabel: '安装',
+                          run: async () => { await props.run('install:' + entry.name, async () => { await startInstall([entry.name]) }) },
+                        })
+                      }}
+                    >{installed && !overwrite ? '已安装' : '安装'}</button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
 
           {installProgress !== null ? (
             <div style={{ marginTop: 10 }}>

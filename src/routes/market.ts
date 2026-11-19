@@ -30,7 +30,7 @@ import {
   searchSkillsSh,
   SkillsShError,
 } from '../repo.ts'
-import { compareVersions, parseVersion } from '../update.ts'
+import { compareVersions, parseVersion } from '../version.ts'
 import { errorText } from '../error-text.ts'
 import { mapConcurrent } from '../concurrency.ts'
 import {

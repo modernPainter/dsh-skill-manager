@@ -1,8 +1,8 @@
 /** 技能浏览：行徽章/分组/角色/过滤排序/相对时间。从 locales.ts 按前缀拆出，键集合不变。 */
 export const zhSkills = {
-  'edit.start': '编辑',
-  'edit.hint': '开启后显示删除与排序操作',
-  'edit.done': '完成',
+  'edit.start': '删除与排序',
+  'edit.hint': '开启后卡片与分组显示删除、上移/下移按钮',
+  'edit.done': '完成删除与排序',
   'groups.new': '新建角色',
   'groups.collapseAll': '全部折叠',
   'groups.expandAll': '全部展开',
@@ -88,9 +88,9 @@ export const zhSkills = {
 } as const
 
 export const enSkills: Record<keyof typeof zhSkills, string> = {
-  'edit.start': 'Edit',
-  'edit.hint': 'Show delete and reorder actions',
-  'edit.done': 'Done',
+  'edit.start': 'Delete & reorder',
+  'edit.hint': 'Show delete and reorder controls on cards and groups',
+  'edit.done': 'Done with delete & reorder',
   'groups.new': 'New role',
   'groups.collapseAll': 'Collapse all',
   'groups.expandAll': 'Expand all',

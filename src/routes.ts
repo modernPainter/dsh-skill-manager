@@ -56,7 +56,11 @@ export function hostTrustFence(read: () => HostConnectionHandle | undefined, onM
   let missingReported = false
   return (request) => {
     const connection = read()
-    if (connection === undefined) {
+    // 0.1.x 的 Connection 服务存在但没有 requestRejection（那是 0.2.x 才加的
+    // 钩子）。此前直接调用会抛 TypeError，被下面的 fail-closed 当成 403，
+    // 面板上表现为 "forbidden: untrusted authority"、技能数恒为 0。
+    // 没有该方法时退回字面 loopback 检查 —— 与本机宿主的信任模型一致。
+    if (connection === undefined || typeof connection.requestRejection !== 'function') {
       if (!missingReported) {
         missingReported = true
         onMissing?.()

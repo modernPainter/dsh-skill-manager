@@ -19,7 +19,7 @@ import { SkillHubApiError, resolveApiUrl } from './api.ts'
 
 const LOCAL_TIMEOUT_MS = 15_000
 const NETWORK_TIMEOUT_MS = 90_000
-const INSTALL_TIMEOUT_MS = 30_000
+const INSTALL_TIMEOUT_MS = 120_000
 
 async function request<T>(path: string, init: RequestInit = {}, timeoutMs = LOCAL_TIMEOUT_MS): Promise<T> {
   const controller = new AbortController()

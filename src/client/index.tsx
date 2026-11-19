@@ -62,6 +62,18 @@ interface SlotsFace {
 declare module '@deepseek-ai/cordis' {
   interface Context {
     slots: SlotsFace
+    /**
+     * 本机 dsh 0.1.x 的设置作用域服务（0.2.x 改名为 configForms）。
+     * 类型同样本地声明：宿主未随包发布可直接引用的 .d.ts。
+     */
+    settingsScope: {
+      bind<T>(options: { namespace: string }): {
+        subscribe(listener: () => void): () => void
+        getSnapshot(): { status: string; writable: boolean; value?: T; base?: unknown; user?: unknown }
+        set(field: string, value: unknown): Promise<unknown>
+        unset(field: string): Promise<unknown>
+      }
+    }
   }
 }
 import { HUB_ENTRY_ID, type HubSettingsValue } from '../protocol.ts'
@@ -71,7 +83,9 @@ import { applySettingsNavIcon } from './settings-nav-icon.ts'
 import { setupSkillSlashDots } from './slash-dots.tsx'
 import { SkillHubSettingsCard, SkillHubSettingsCardController } from './SkillHubSettingsCard.tsx'
 import { SkillHubPanel } from './panel/SkillHubPanel.tsx'
+import { HubOverlay } from './panel/HubOverlay.tsx'
 import { IconSkillOutline16 } from './icons.tsx'
+import { mountSkillManagerSidebarEntry } from './sidebar-entry.ts'
 
 /** Locale namespace this plugin owns. */
 const NS = 'dsh-skill-hub'
@@ -90,7 +104,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
  * `configForms` is the shared settings-form service itself; mirror the
  * official settings-plugins inject list.
  */
-export const inject = ['slots', 'locale', 'connection', 'remote', 'configForms', 'inputTriggers']
+export const inject = ['slots', 'locale', 'connection', 'remote', 'settingsScope', 'inputTriggers']
 
 /** Type-only surface (export discipline: no value exports beyond the plugin contract). */
 export type { SkillHubPanelProps } from './panel/SkillHubPanel.tsx'
@@ -106,30 +120,33 @@ export function apply(ctx: ClientContext): void {
   const t = ctx.locale.bind(NS)
   const api = new SkillHubApi()
 
-  // The hub's config form is the same Loader entry the host writes and the
-  // Plugins manager renders; the browser half reads it only to color the dots
-  // (single form instance, so slash-dots keeps one subscription).
-  const scope = ctx.configForms.get<HubSettingsValue>(HUB_ENTRY_ID)
-  const settingsCard = new SkillHubSettingsCardController(scope)
+  const scope = ctx.settingsScope.bind<HubSettingsValue>({ namespace: HUB_ENTRY_ID })
+  const settingsCard = new SkillHubSettingsCardController(scope as unknown as import('./settings-form.ts').FormScope)
 
   // Chat `/` 菜单技能圆点：为每个候选行加可调用性圆点（蓝=模型可调，绿=仅用户），颜色与面板图例同步；仅装饰，不自动预填 "/"
   // inject 含 inputTriggers 保证 fiber 就绪后再 wrap，slash-dots 内的 undefined 防御仅用于单元测试 mock
   ctx.effect(() => setupSkillSlashDots(ctx, api, scope), 'dsh-skill-hub: slash dots')
 
-  // The plugin's own configuration page. It must be registered here: the
-  // Plugins manager only renders the config section for bundles that appear in
-  // `plugins.bundle.config` (`ledger.bundles.has(openPkg.name)`), and its key is
-  // the BUNDLE PACKAGE NAME — not the settings entry id (`skill-hub`). There is
-  // no auto-generated fallback page in dsh 0.1.7.
+  // Plugin configuration card: support both 0.2.x (`plugins.bundle.config` keyed
+  // by bundle package name) and 0.1.x (`settings.plugin.item` keyed by settings
+  // namespace `skill-hub`).
   ctx.effect(
     () => ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
       name: 'plugins.bundle.config',
-      // 键是 bundle 包名（不是 settings entry id），改名后必须同步。
       key: 'dsh-skill-manager',
       locale: NS,
       inject: () => settingsCard.inject(),
     }, SkillHubSettingsCard)),
-    'dsh-skill-hub: plugin config',
+    'dsh-skill-hub: plugin config (0.2)',
+  )
+  ctx.effect(
+    () => ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
+      name: 'settings.plugin.item',
+      key: HUB_ENTRY_ID,
+      locale: NS,
+      inject: () => settingsCard.inject(),
+    }, SkillHubSettingsCard)),
+    'dsh-skill-hub: plugin config (0.1)',
   )
 
   // Top-level Settings section: the skill management page.
@@ -145,29 +162,30 @@ export function apply(ctx: ClientContext): void {
     'dsh-skill-hub: settings section',
   )
 
-  // Wide sidebar main panel: same hub surface, 960px shell. The settings page
-  // remains the canonical place for configuration; this panel is the sidebar
-  // companion for browsing skills without leaving the conversation.
+  // Sidebar top entry: the host exposes no slot above the workspace browser,
+  // so mirror what 封装生成 / 符号生成 do — inject a plain DOM row after the
+  // plugin family (below 符号生成), self-healing across React re-renders.
+  // Clicking the row dispatches an event consumed by the overlay below.
   ctx.effect(
-    () => ctx.slots.inject('main', () => ctx.slots.register({
-      name: 'main',
-      key: 'skill-hub',
-      locale: NS,
-      inject: () => ({}),
-    }, () => <SkillHubPanel api={api} mode='sidebar' />)),
-    'dsh-skill-hub: sidebar main panel',
+    () => mountSkillManagerSidebarEntry({
+      label: () => t('entry.label'),
+      tooltip: () => t('entry.label'),
+    }),
+    'dsh-skill-hub: sidebar entry',
   )
 
-  // Sidebar entry icon, directly under 插件 in the left rail.
+  // The modal itself lives in the root overlay slot: a DOM-injected trigger
+  // cannot host React, and `shell.overlay` is the additive list slot the
+  // layout keeps mounted regardless of which pane is visible.
   ctx.effect(
-    () => ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
-      name: 'sidebar.panellist',
+    () => ctx.slots.inject('shell.overlay', () => ctx.slots.register({
+      name: 'shell.overlay',
       id: 'skill-hub',
       order: 30,
-      label: () => t('entry.label'),
       locale: NS,
-    }, IconSkillOutline16)),
-    'dsh-skill-hub: sidebar entry',
+      inject: () => ({ api, label: t('entry.label') }),
+    }, HubOverlay)),
+    'dsh-skill-hub: overlay',
   )
 
   // Settings nav icon. dsh 0.2.2-rc.2 起宿主提供 `settings.section.icon`

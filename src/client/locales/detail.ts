@@ -1,6 +1,7 @@
 /** 技能详情。从 locales.ts 按前缀拆出，键集合不变。 */
 export const zhDetail = {
-  'detail.copyMention': '复制 $mention',
+  'detail.copyMention': '复制 /技能名',
+  'detail.copyMentionHint': '复制后粘贴到对话里，可显式调用该技能',
   'detail.copyPath': '复制路径',
   'detail.copied': '已复制',
   'detail.back': '返回列表',
@@ -19,7 +20,8 @@ export const zhDetail = {
 } as const
 
 export const enDetail: Record<keyof typeof zhDetail, string> = {
-  'detail.copyMention': 'Copy $mention',
+  'detail.copyMention': 'Copy /name',
+  'detail.copyMentionHint': 'Paste into the chat to invoke this skill explicitly',
   'detail.copyPath': 'Copy path',
   'detail.copied': 'Copied',
   'detail.back': 'Back to list',

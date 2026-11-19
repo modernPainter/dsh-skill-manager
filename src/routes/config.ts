@@ -12,11 +12,9 @@ import {
   type DiagnosticFixRequest,
   type DiagnosticFixResponse,
   type HubConfig,
-  type UpdateApplyRequest,
-  type UpdateApplyResponse,
 } from '../protocol.ts'
 import { fixDiagnosticFile } from '../skillfs.ts'
-import { applyUpdate, checkLatestRelease, CURRENT_VERSION, detectInstallContext, UPDATE_REPO } from '../update.ts'
+import { CURRENT_VERSION } from '../version.ts'
 import {
   configOf,
   homeOf,
@@ -105,49 +103,6 @@ export function configRoutes(deps: SkillHubRouteDeps): RouteSpec[] {
           config = await deps.updateConfig(patch)
         }
         writeJson(res, 200, configResponse(config, savedOf(deps)))
-      },
-    },
-    // -------------------------------------------------------------- update
-    // 自身更新检查：npm registry 的 latest tag 为准（用户实际能装到的版本），
-    // GitHub release 兜底。结果缓存 10 分钟，`?refresh=1` 强制重查。
-    {
-      path: SKILL_HUB_API.update,
-      methods: ['GET'],
-      handler: async ({ res, url }) => {
-        writeJson(res, 200, await checkLatestRelease(UPDATE_REPO, fetch, { refresh: url.searchParams.get('refresh') === '1' }))
-      },
-    },
-    // --------------------------------------------------------- update apply
-    // 一键更新：只有装在 profile 的 node_modules 里才允许（link 到开发目录的
-    // 那份换了会断开开发流程）。执行走 `dsh plugin`，复用宿主自己的检查 ——
-    // Electron 独占的 profile 会在那层被拒绝，错误原样回传。
-    {
-      path: SKILL_HUB_API.updateApply,
-      methods: ['POST'],
-      jsonBody: true,
-      handler: async ({ res, body }) => {
-        const request = body as unknown as UpdateApplyRequest
-        const version = typeof request.version === 'string' ? request.version.trim() : ''
-        if (version === '') { writeError(res, 400, 'version is required'); return }
-        const context = detectInstallContext()
-        if (context.kind !== 'profile' || context.profileName === undefined) {
-          writeJson(res, 200, {
-            ok: true,
-            appliedVersion: null,
-            restartRequired: false,
-            installKind: context.kind,
-            error: context.reason ?? 'this copy cannot be updated in place',
-          } satisfies UpdateApplyResponse)
-          return
-        }
-        const result = await applyUpdate(version, context.profileName)
-        writeJson(res, 200, {
-          ok: true,
-          appliedVersion: result.appliedVersion,
-          restartRequired: result.ok,
-          installKind: context.kind,
-          ...(result.error !== undefined ? { error: result.error } : {}),
-        } satisfies UpdateApplyResponse)
       },
     },
     // -------------------------------------------------------- diagnostic fix

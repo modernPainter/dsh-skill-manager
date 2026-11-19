@@ -20,8 +20,8 @@ import { markAutoChecked, POLL_MS, shouldAutoCheck, SLOW_POLL_MS, type FlowNotic
 /** The hook's result: the panel's complete state + action surface. */
 export type SkillHubState = ReturnType<typeof useSkillHub>
 
-/** 一级视图：通用 / 工作区 / 市场 / 回收站。 */
-export type SkillTab = 'general' | 'workspace' | 'market' | 'repos' | 'trash'
+/** 一级视图：技能 / 仓库 / 场景（简化后只保留管理主链路）。 */
+export type SkillTab = 'general' | 'workspace' | 'market' | 'repos' | 'scenes' | 'trash'
 
 /** 通用页二级查看方式：全部 / 按来源 / 按角色。 */
 export type GeneralView = 'all' | 'source' | 'location' | 'scene'
@@ -52,8 +52,8 @@ export function useSkillHub(api: SkillHubApi) {
   const [collapsedGroups, setCollapsedGroups] = useState<ReadonlySet<string>>(new Set())
   /** 项目级三级树里已细分（按 .dsh/.agents）的项目键。 */
   const [subdividedProjects, setSubdividedProjects] = useState<ReadonlySet<string>>(new Set())
-  const [showLegend, setShowLegend] = useState(false)
-  const [editMode, setEditMode] = useState(false)
+  // 卡片库已提供直接的删除入口，「删除与排序」模式不再暴露；保留常量供旧分组视图的类型兼容。
+  const [editMode] = useState(false)
 
   const toggleGroupCollapse = useCallback((key: string): void => {
     setCollapsedGroups((previous) => {
@@ -142,12 +142,12 @@ export function useSkillHub(api: SkillHubApi) {
   }, [catalogFlow.load, meta.loadUses, groupFlow.loadGroups, sourceFlow.loadSources, meta.loadConfig])
 
   // ------------------------------------------------- daily auto-check
-  // 打开面板时每天最多自动检查一次（自身更新 + 全部来源 + 全部市场源），
-  // 时间戳存 localStorage 跨会话生效；手动按钮随时可用，不受节流限制。
+  // 打开面板时每天最多自动检查一次（全部来源 + 全部市场源），
+  // 时间戳存 localStorage 跨会话生效。
+  // 自身版本检查已移除：它查的是上游 dsh-skill-hub，点更新会覆盖本改造版。
   useEffect(() => {
     if (!shouldAutoCheck()) return
     markAutoChecked()
-    void meta.checkUpdate()
     void sourceFlow.checkSources()
     void marketFlow.checkMarket()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -156,7 +156,6 @@ export function useSkillHub(api: SkillHubApi) {
   return {
     // state
     catalog: catalogFlow.catalog, loading: catalogFlow.loading, loadError, successBanner,
-    updateState: meta.updateState,
     repoDiscoverState: marketFlow.repoDiscoverState, scanningRepo: marketFlow.scanningRepo,
     repoSelected: marketFlow.repoSelected, repoImporting: marketFlow.repoImporting,
     repoResult: marketFlow.repoResult,
@@ -181,7 +180,7 @@ export function useSkillHub(api: SkillHubApi) {
     confirmClearTrash: sourceFlow.confirmClearTrash, updateAllDialog: marketFlow.updateAllDialog,
     editingTag: groupFlow.editingTag, editName: groupFlow.editName, membersDraft: groupFlow.membersDraft,
     newTagName: groupFlow.newTagName, tagBusy,
-    editSearch: groupFlow.editSearch, collapsedGroups, subdividedProjects, showLegend, editMode,
+    editSearch: groupFlow.editSearch, collapsedGroups, subdividedProjects, editMode,
     versionDialog: marketFlow.versionDialog, versionBusy: marketFlow.versionBusy,
     // derived
     actionNames: catalogFlow.actionNames, viewNames: catalogFlow.viewNames,
@@ -203,9 +202,9 @@ export function useSkillHub(api: SkillHubApi) {
     setConfirmClearTrash: sourceFlow.setConfirmClearTrash, setUpdateAllDialog: marketFlow.setUpdateAllDialog,
     setEditingTag: groupFlow.setEditingTag, setEditName: groupFlow.setEditName,
     setMembersDraft: groupFlow.setMembersDraft, setNewTagName: groupFlow.setNewTagName,
-    setEditSearch: groupFlow.setEditSearch, setShowLegend, setEditMode,
+    setEditSearch: groupFlow.setEditSearch,
     setVersionDialog: marketFlow.setVersionDialog,
-    toggleGroupCollapse, toggleSubdivide, setAllGroupsCollapsed, checkUpdate: meta.checkUpdate, loadMarket: marketFlow.loadMarket,
+    toggleGroupCollapse, toggleSubdivide, setAllGroupsCollapsed, loadMarket: marketFlow.loadMarket,
     openDetail: catalogFlow.openDetail, toggle: catalogFlow.toggle, enableDisabled: catalogFlow.enableDisabled,
     toggleGroup: groupFlow.toggleGroup, batchToggleNames: catalogFlow.batchToggleNames,
     resolveConflict: groupFlow.resolveConflict,

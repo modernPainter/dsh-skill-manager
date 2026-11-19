@@ -11,14 +11,10 @@
 import { useEffect, useState, type ReactElement } from 'react'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import type { UpdateApplyResponse, UpdateCheckResponse } from '../protocol.ts'
 import { SkillHubApi } from './api.ts'
-import { errorMessage, tt } from './helpers.ts'
 import type { HubKey } from './locales.ts'
 import { ColorField, NumberField, PluginSettingsCard, SecretField, SwitchField } from './settings-card.tsx'
 import { booleanField, CardForm, colorField, numberField, secretField, type CardShell, type FieldState, type FormScope } from './settings-form.ts'
-// 复用卡片自己的样式表：更新提示 pill 与版本徽标必须同一套 token 与尺寸。
-import css from './settings-card.module.css'
 // Single source for the TS-side dot defaults (the panel CSS mirrors these).
 import { DEFAULT_DOT_MODEL_COLOR, DEFAULT_DOT_USER_COLOR } from './panel/format.ts'
 
@@ -125,53 +121,15 @@ export function SkillHubSettingsCard(props: SkillHubSettingsCardProps): ReactEle
   const state = props.useSkillHubSettingsCard((snapshot) => snapshot)
   // 插件自身版本：挂载时从 config 路由取一次（与面板标题徽标同源），失败静默不显示。
   const [version, setVersion] = useState<string | undefined>(undefined)
-  // 更新状态：服务端缓存 10 分钟，所以「打开设置页」最多一次本地请求，
-  // 不会因为反复进设置页把 registry / GitHub 打满。
-  const [update, setUpdate] = useState<UpdateCheckResponse | null>(null)
-  // 一键更新：进行中的状态与结果都留在本地 —— 它不进配置表单，不该被「保存/放弃」影响。
-  const [applying, setApplying] = useState(false)
-  const [applyOutcome, setApplyOutcome] = useState<UpdateApplyResponse | null>(null)
   useEffect(() => {
     let cancelled = false
     const api = new SkillHubApi()
     void api.config()
       .then((res) => { if (!cancelled && res.ok) setVersion(res.pluginVersion) })
       .catch(() => { /* 版本徽标是装饰性的，失败不提示 */ })
-    void api.updateCheck()
-      .then((res) => { if (!cancelled) setUpdate(res) })
-      .catch(() => { /* 检查失败不打扰：面板「⋯ → 检查更新」仍可手动重试 */ })
+    // 不做自身版本检查：本插件是独立项目，更新入口会指向上游包并把改造版覆盖掉。
     return () => { cancelled = true }
   }, [])
-  const runUpdate = (target: string): void => {
-    if (applying) return
-    setApplying(true)
-    setApplyOutcome(null)
-    void new SkillHubApi().applyUpdate(target)
-      .then((result) => { setApplyOutcome(result) })
-      .catch((error: unknown) => {
-        // 网络/超时是拒绝（Promise reject），与「服务端说不行」分开处理，但都用同一种展示。
-        setApplyOutcome({ ok: true, appliedVersion: null, restartRequired: false, installKind: 'development', error: errorMessage(error) })
-      })
-      .finally(() => { setApplying(false) })
-  }
-  // 标题行的更新区：待重启 > 进行中 > 失败 > 有新版本。一次只显示一种，
-  // 标题行空间有限，堆两种状态会看不清当前到底发生了什么。
-  const versionExtra = ((): ReactElement | undefined => {
-    const pending = applyOutcome?.appliedVersion ?? update?.pendingRestartVersion
-    if (pending !== undefined) return <span className={css.updateTag}>{tt('update.pendingRestart', { version: pending })}</span>
-    if (applying) return <span className={css.updateTag}>{tt('update.applying')}</span>
-    if (applyOutcome?.error !== undefined) {
-      return <span className={css.updateTag + ' ' + css.updateTagFailed} title={tt('update.applyFailedHint', { error: applyOutcome.error })}>{tt('update.applyFailed')}</span>
-    }
-    const target = update?.updateAvailable === true ? update.latestVersion : null
-    if (target === null || target === undefined) return undefined
-    return (
-      <>
-        {update?.url != null ? <a className={css.updateTag} href={update.url} target='_blank' rel='noreferrer'>{tt('update.newVersion', { version: target })}</a> : null}
-        <button type='button' className={css.updateApply} onClick={() => { runUpdate(target) }}>{tt('update.apply')}</button>
-      </>
-    )
-  })()
   const disabled = !state.writable
   const fieldProps = {
     overriddenLabel: t('settings.overridden'),
@@ -184,7 +142,6 @@ export function SkillHubSettingsCard(props: SkillHubSettingsCardProps): ReactEle
       titleKey='settings.title'
       descriptionKey='settings.description'
       version={version}
-      versionExtra={versionExtra}
       state={state}
       onSave={props.save}
       onDiscard={props.discard}

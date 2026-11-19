@@ -15,7 +15,7 @@ import {
   type WritableRoot,
 } from '../protocol.ts'
 import { rootPath, readSkillInterface, scanDiagnostics, type SkillInterface } from '../skillfs.ts'
-import { CURRENT_VERSION } from '../update.ts'
+import { CURRENT_VERSION } from '../version.ts'
 import { homeOf, isWritableSource, type SkillHubRouteDeps } from './deps.ts'
 
 /**

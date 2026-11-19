@@ -520,6 +520,12 @@ body:not([data-ds-dark-theme]) .panel {
 .detailNameWrap { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .displayNameInline { font-size: var(--hub-fs-13); margin-left: 0; }
 .detailActions { margin-left: auto; gap: 6px; }
+/* 详情弹窗右上角关闭：与 HubOverlay 的 × 保持一致。 */
+.detailClose { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: none; border-radius: var(--hub-radius-sm); background: transparent; color: var(--hub-text-3); font-size: 18px; line-height: 1; cursor: pointer; }
+.detailClose:hover { background: var(--hub-hover); color: var(--hub-text); }
+/* 名称 / 路径后的内联复制图标。 */
+.copyIcon { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; padding: 0; margin-left: 2px; border: none; border-radius: var(--hub-radius-sm); background: transparent; color: var(--hub-text-4); font-size: var(--hub-fs-11); line-height: 1; vertical-align: middle; cursor: pointer; }
+.copyIcon:hover { background: var(--hub-hover); color: var(--hub-text-2); }
 .dialogListTall { max-height: 320px; overflow-y: auto; }
 .dialogOption { display: flex; align-items: center; gap: 8px; cursor: pointer; }
 /* 「也在 xxx」徽标放在描述行行首，别占名字行的宽度（会挤断 kebab-case 技能名）。 */

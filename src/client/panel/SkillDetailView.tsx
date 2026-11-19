@@ -9,6 +9,7 @@ import { useEffect, useRef, useState, type JSX } from 'react'
 import type { GroupsResponse, HubConfig, SkillDetail, SourceCheckResult, SourcesResponse } from '../../protocol.ts'
 import { copyTextToClipboard, isDisplayNameDistinct, tt } from '../helpers.ts'
 import { isProjectSource } from '../grouping.ts'
+import { IconCopyOutline16 } from '../icons.tsx'
 import css from './panel.module.css'
 import { dotStyle, formatDateTime, shortSha } from './format.ts'
 import { SourceStatusBadge } from './SourceStatusBadge.tsx'
@@ -61,7 +62,7 @@ export function SkillDetailView(props: SkillDetailViewProps): JSX.Element {
   return (
     <div className={css.panel + (modal === true ? ' ' + css.panelModal : '')}>
       <div className={css.detailHead}>
-        <button type='button' className={css.back} onClick={onBack}>{tt(modal === true ? 'detail.close' : 'detail.back')}</button>
+        {modal !== true ? <button type='button' className={css.back} onClick={onBack}>{tt('detail.back')}</button> : null}
         <span className={css.detailName + ' ' + css.detailNameWrap}>
           {detail.name}
           {isDisplayNameDistinct(detail.name, detail.displayName) ? <span className={css.displayName + ' ' + css.displayNameInline}>{detail.displayName}</span> : null}
@@ -70,19 +71,31 @@ export function SkillDetailView(props: SkillDetailViewProps): JSX.Element {
             : detail.invocation.userInvocable
               ? <span className={css.dot + ' ' + css.dotUser} style={dotStyle(hubConfig?.dotUserColor)} title={tt('legend.user')} />
               : null}
+          {/* 名称后的复制图标：复制 `/技能名`，粘贴到对话里可显式调用。 */}
+          {detail.invocation.userInvocable ? (
+            <button type='button' className={css.copyIcon} aria-label={tt('detail.copyMention')} title={tt('detail.copyMentionHint')} onClick={() => { copyText('/' + detail.name, 'name') }}>
+              {copied === 'name' ? '✓' : <IconCopyOutline16 size={14} />}
+            </button>
+          ) : null}
         </span>
         <span className={css.actions + ' ' + css.detailActions}>
           {disabled === true && onEnable !== undefined ? <button type='button' className={css.opBtn} role='switch' aria-checked={false} aria-label={tt('row.enable')} onClick={onEnable}>{tt('row.enable')}</button> : null}
-          <button type='button' className={css.opBtn} onClick={() => { copyText('$' + detail.name, 'mention') }}>{copied === 'mention' ? tt('detail.copied') : tt('detail.copyMention')}</button>
-          {detail.path !== undefined ? <button type='button' className={css.opBtn} onClick={() => { const path = detail.path; if (path !== undefined) copyText(path, 'path') }}>{copied === 'path' ? tt('detail.copied') : tt('detail.copyPath')}</button> : null}
         </span>
+        {modal === true ? <button type='button' className={css.detailClose} aria-label={tt('detail.close')} title={tt('detail.close')} onClick={onBack}>×</button> : null}
       </div>
       <div className={css.detailMeta}>
         <div className={css.detailMetaLine}>{tt('detail.provider')}: {detail.provider}</div>
         {detail.source !== undefined ? <div className={css.detailMetaLine}>{tt('detail.source')}: <span title={detail.source}>{sourceLabel(detail.source)}</span> <span className={css.detailSourceRaw}>({detail.source})</span></div> : null}
         {detail.addedAt !== undefined ? <div className={css.detailMetaLine}>{tt('detail.addedAt')}: {formatDateTime(detail.addedAt)}</div> : null}
         {detail.updatedAt !== undefined ? <div className={css.detailMetaLine}>{tt('detail.updatedAt')}: {formatDateTime(detail.updatedAt)}</div> : null}
-        {detail.path !== undefined ? <div className={css.detailMetaLine}>{tt('detail.path')}: {detail.path}</div> : null}
+        {detail.path !== undefined ? (
+          <div className={css.detailMetaLine}>
+            {tt('detail.path')}: {detail.path}
+            <button type='button' className={css.copyIcon} aria-label={tt('detail.copyPath')} title={tt('detail.copyPath')} onClick={() => { const path = detail.path; if (path !== undefined) copyText(path, 'path') }}>
+              {copied === 'path' ? '✓' : <IconCopyOutline16 size={13} />}
+            </button>
+          </div>
+        ) : null}
         {detail.whenToUse !== undefined ? <div className={css.detailMetaLine}>{tt('detail.whenToUse')}: {detail.whenToUse}</div> : null}
         {detail.argumentHint !== undefined ? <div className={css.detailMetaLine}>{tt('detail.argumentHint')}: {detail.argumentHint}</div> : null}
         {(() => {

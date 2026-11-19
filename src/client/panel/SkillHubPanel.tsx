@@ -17,22 +17,20 @@ import { IconSkillOutline16 } from '../icons.tsx'
 import type { SkillHubApi } from '../api.ts'
 import { errorMessage, tt } from '../helpers.ts'
 import { filterBySource, isProjectSource, PRIVATE_SOURCE, type SortKey } from '../grouping.ts'
-import { dotStyle } from './format.ts'
 import { SkillDetailView } from './SkillDetailView.tsx'
 import { TagEditorView } from './TagEditorView.tsx'
-import { SourcesView } from './SourcesView.tsx'
-import { LocationsView } from './LocationsView.tsx'
-import { ScenesView } from './ScenesView.tsx'
-import { AllSkillsView } from './AllSkillsView.tsx'
-import { WorkspaceView } from './WorkspaceView.tsx'
-import { TrashView } from './TrashView.tsx'
-import { MarketView } from './MarketView.tsx'
+import { LibraryView } from './LibraryView.tsx'
 import { ManagerView } from './ManagerView.tsx'
 import { PanelDialogs } from './PanelDialogs.tsx'
 import { ForeignImportDialog } from './ForeignImportDialog.tsx'
 import { CreateSkillDialog } from './CreateSkillDialog.tsx'
 import { useSkillHub } from './useSkillHub.ts'
 import css from './panel.module.css'
+
+/** 一级分段切换（技能 / 仓库）：容器、普通项、选中项。 */
+const segmentedStyle: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', padding: 2, gap: 2, borderRadius: 8, background: 'var(--dsh-color-fill-secondary, rgba(127,127,127,0.12))' }
+const segmentedItemStyle: React.CSSProperties = { border: 'none', background: 'transparent', padding: '4px 16px', fontSize: 13, borderRadius: 6, cursor: 'pointer', color: 'inherit', opacity: 0.7 }
+const segmentedActiveStyle: React.CSSProperties = { ...segmentedItemStyle, background: 'var(--dsh-color-fill-primary, #fff)', opacity: 1, fontWeight: 600, boxShadow: '0 1px 2px rgba(0,0,0,0.12)' }
 
 export interface SkillHubPanelProps {
   api: SkillHubApi
@@ -54,19 +52,21 @@ export function SkillHubPanel(props: SkillHubPanelProps): React.JSX.Element {
   const [filtersOpen, setFiltersOpen] = useState(false)
   /** 「更多」溢出菜单：低频导入动作收进这里，保持顶部克制。 */
   const [moreOpen, setMoreOpen] = useState(false)
+  /** 「⋯」菜单锚点：点击菜单外部时用它判断是否属于菜单自身。 */
+  const moreMenuRef = useRef<HTMLSpanElement | null>(null)
+  /** 二级页面：仓库管理 / 场景备份，null 表示技能库主页。 */
+  const [page, setPage] = useState<'repos' | 'scenes' | null>(null)
   const {
-    catalog, loading, loadError, successBanner, updateState, detail, detailLoading, showForm, formName, formDesc,
+    catalog, loading, loadError, successBanner, detail, detailLoading, showForm, formName, formDesc,
     formBody, formRoot, formWorkspace, workspaces, formBusy, formMessage, hubConfig, tab, generalView, sourceFilter, statusFilter, sortKey, search,
     workspace, setWorkspace,
     sourcesState, tagBusy, batchBusy, sourceOptions, filtered,
     conflictDialog, confirmDialog, deleteSkillDialog, deleteGroupDialog, confirmClearTrash, branchChoice, branchBusy, marketSyncDialog,
     syncBusy, editingTag, editName, membersDraft, editSearch, uses, groupsState, sourceCheck, checkingSource, syncingSource,
-    showLegend, editMode,
-    setLoadError, setSuccessBanner, setDetail, setShowForm, setFormName, setFormDesc, setFormBody, setFormRoot, setFormWorkspace, setFormMessage, setTab,
-    setGeneralView, setSourceFilter, setStatusFilter, setSortKey, setSearch, setConflictDialog, setConfirmDialog, setDeleteSkillDialog, setDeleteGroupDialog,
+    setLoadError, setSuccessBanner, setDetail, setShowForm, setFormName, setFormDesc, setFormBody, setFormRoot, setFormWorkspace, setFormMessage,
+    setSourceFilter, setStatusFilter, setSortKey, setSearch, setConflictDialog, setConfirmDialog, setDeleteSkillDialog, setDeleteGroupDialog,
     setConfirmClearTrash, setBranchChoice, setMarketSyncDialog, setEditingTag, setEditName, setMembersDraft, setEditSearch,
-    setShowLegend, setEditMode,
-    checkUpdate, loadMarket, checkSources, requestSync, requestDelete, clearTrash, runDeleteSkill, runDeleteGroup,
+    checkSources, requestSync, requestDelete, clearTrash, runDeleteSkill, runDeleteGroup,
     runConfirmed, resolveConflict, confirmBranchChoice, confirmMarketSync, create, saveTag, deleteTag, enableDisabled, reloadCatalog,
   } = hub
   const { shortenedCount, fixingPaths, clearListFilters } = hub
@@ -110,6 +110,28 @@ export function SkillHubPanel(props: SkillHubPanelProps): React.JSX.Element {
       if (zipInputRef.current !== null) zipInputRef.current.value = ''
     }
   }
+
+  // -------------------------------------------------------------- menus
+
+  /**
+   * 「⋯」菜单：点击外部或按 Esc 关闭。用 click 而不是 mousedown ——
+   * mousedown 会先卸载菜单项，导致随后的 click 落不到按钮上，菜单项点不动。
+   */
+  useEffect(() => {
+    if (!moreOpen) return
+    const onDocumentClick = (event: MouseEvent): void => {
+      const anchor = moreMenuRef.current
+      if (anchor !== null && event.target instanceof Node && anchor.contains(event.target)) return
+      setMoreOpen(false)
+    }
+    const onKeyDown = (event: KeyboardEvent): void => { if (event.key === 'Escape') setMoreOpen(false) }
+    document.addEventListener('click', onDocumentClick)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('click', onDocumentClick)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [moreOpen])
 
   // -------------------------------------------------------------- detail
 
@@ -191,20 +213,6 @@ export function SkillHubPanel(props: SkillHubPanelProps): React.JSX.Element {
   const hasSourceFilter = tab === 'general' && !rolesView && sourceFilter !== 'all'
   const activeFilterCount = (hasSourceFilter ? 1 : 0) + (hub.invocationFilter !== 'all' ? 1 : 0) + (statusFilterActive ? 1 : 0)
 
-  /** 检查结果的悬停提示：收敛到「检查更新」按钮上，不再占面板顶部横幅。 */
-  const updateTitle = ((): string | undefined => {
-    if (updateState.status === 'checking') return tt('update.checking')
-    if (updateState.status === 'error') return tt('update.error', { error: updateState.message })
-    if (updateState.status === 'ready') {
-      const data = updateState.data
-      if (data.error !== undefined) return tt('update.error', { error: data.error })
-      if (data.updateAvailable) return tt('update.available', { version: data.latestVersion ?? '', current: data.currentVersion })
-      if (data.latestVersion === null) return tt('update.unavailable')
-      return tt('update.upToDate', { version: data.latestVersion })
-    }
-    return undefined
-  })()
-
   const projectCount = catalog?.skills.filter((skill) => isProjectSource(skill.source)).length ?? 0
   const generalAllActive = (catalog?.skills ?? []).filter((skill) => !isProjectSource(skill.source))
   const generalSkills = filterBySource(generalAllActive, sourceFilter, hub.origins)
@@ -232,7 +240,7 @@ export function SkillHubPanel(props: SkillHubPanelProps): React.JSX.Element {
     ? projectCount
     : tab === 'trash'
       ? (sourcesState?.trash.length ?? 0)
-      : tab === 'market'
+      : tab === 'market' || tab === 'scenes'
         ? null
         : generalActiveShown
 
@@ -249,19 +257,8 @@ export function SkillHubPanel(props: SkillHubPanelProps): React.JSX.Element {
         {catalog !== null && !catalog.complete ? <span className={css.hint}>{tt('panel.incomplete')}</span> : null}
         {catalog !== null && (catalog.duplicateNames?.length ?? 0) > 0 ? <button type='button' className={css.opBtn} title={tt('row.duplicateHint')} onClick={() => { clearListFilters() }}>⚠ {tt('row.duplicate')}×{(catalog.duplicateNames ?? []).length}</button> : null}
         <span className={css.actions}>
-          <button
-            type='button'
-            className={css.button + (editMode ? ' ' + css.primary : '')}
-            aria-pressed={editMode}
-            title={tt('edit.hint')}
-            onClick={() => { setEditMode((value) => !value) }}
-          >{tt(editMode ? 'edit.done' : 'edit.start')}</button>
-          {updateState.status === 'ready' && updateState.data.updateAvailable && updateState.data.url !== null
-            ? <a className={css.updateLink} href={updateState.data.url} target='_blank' rel='noreferrer'>{tt('update.newVersion', { version: updateState.data.latestVersion ?? '' })}</a>
-            : null}
           <button type='button' className={css.button + ' ' + css.primary} onClick={() => { setShowForm((value) => !value) }}>{tt('panel.new')}</button>
-          <button type='button' className={css.legendToggle + (showLegend ? ' ' + css.legendToggleActive : '')} aria-label={tt('legend.hint')} onClick={() => { setShowLegend((value) => !value) }} title={tt('legend.hint')}>?</button>
-          <span className={css.menuAnchor}>
+          <span className={css.menuAnchor} ref={moreMenuRef}>
             <button
               type='button'
               className={css.opBtn + ' ' + css.moreButton}
@@ -273,20 +270,13 @@ export function SkillHubPanel(props: SkillHubPanelProps): React.JSX.Element {
             >⋯</button>
             {moreOpen ? (
               <div className={css.menu} role='menu'>
-                <button type='button' role='menuitem' className={css.menuItem} disabled={updateState.status === 'checking'} title={updateTitle} onClick={() => { setMoreOpen(false); void checkUpdate() }}>{updateState.status === 'checking' ? tt('update.checking') : tt('update.check')}</button>
                 <button type='button' role='menuitem' className={css.menuItem} onClick={() => { setMoreOpen(false); setShowForeign(true) }}>{tt('foreign.open')}</button>
                 <button type='button' role='menuitem' className={css.menuItem} disabled={zipBusy} title={tt('zip.hint')} onClick={() => { setMoreOpen(false); zipInputRef.current?.click() }}>{zipBusy ? tt('zip.importing') : tt('zip.open')}</button>
+                <button type='button' role='menuitem' className={css.menuItem} disabled={page !== null} onClick={() => { setMoreOpen(false); setPage('scenes') }}>{tt('view.scenes')}</button>
               </div>
             ) : null}
           </span>
         </span>
-      </div>
-      <div className={css.mainTabs} role='tablist' aria-label={tt('panel.title')}>
-        <button type='button' role='tab' aria-selected={tab === 'general'} className={css.mainTab + (tab === 'general' ? ' ' + css.mainTabActive : '')} onClick={() => { setTab('general') }}>{tt('view.general')}</button>
-        <button type='button' role='tab' aria-selected={tab === 'workspace'} className={css.mainTab + (tab === 'workspace' ? ' ' + css.mainTabActive : '')} onClick={() => { setTab('workspace') }}>{tt('view.workspace')}</button>
-        <button type='button' role='tab' aria-selected={tab === 'market'} className={css.mainTab + (tab === 'market' ? ' ' + css.mainTabActive : '')} onClick={() => { setTab('market'); void loadMarket() }}>{tt('view.market')}</button>
-        <button type='button' role='tab' aria-selected={tab === 'repos'} className={css.mainTab + (tab === 'repos' ? ' ' + css.mainTabActive : '')} onClick={() => { setTab('repos') }}>{tt('view.repos')}</button>
-        <button type='button' role='tab' aria-selected={tab === 'trash'} className={css.mainTab + (tab === 'trash' ? ' ' + css.mainTabActive : '')} onClick={() => { setTab('trash') }}>{tt('view.trash')}{tab !== 'trash' && (sourcesState?.trash.length ?? 0) > 0 ? <span className={css.tabCount}>{sourcesState?.trash.length}</span> : null}</button>
       </div>
       <input
         ref={zipInputRef}
@@ -341,14 +331,6 @@ export function SkillHubPanel(props: SkillHubPanelProps): React.JSX.Element {
         </div>
       ) : null}
 
-      {showLegend ? (
-        <div className={css.legend}>
-          <span className={css.legendItem}><span className={css.dot + ' ' + css.dotModel} style={dotStyle(hubConfig?.dotModelColor)} />{tt('legend.model')}</span>
-          <span className={css.legendItem}><span className={css.dot + ' ' + css.dotUser} style={dotStyle(hubConfig?.dotUserColor)} />{tt('legend.user')}</span>
-          <span className={css.legendHint}>{tt('legend.hint')}</span>
-        </div>
-      ) : null}
-
       {loading ? (
         <div className={css.skeleton} role='status' aria-label={tt('panel.loading')}>
           <div className={css.skeletonRow} />
@@ -359,26 +341,26 @@ export function SkillHubPanel(props: SkillHubPanelProps): React.JSX.Element {
 
       {detailLoading ? <div className={css.empty}>{tt('detail.loading')}</div> : null}
 
-      {tab === 'market' ? (
-        <MarketView hub={hub} />
-      ) : tab === 'repos' ? (
+      {/* 一级切换：技能 / 仓库（场景从「⋯ → 场景」进入，作为临时第三页） */}
+      <div className={css.filterBar}>
+        <span style={segmentedStyle}>
+          <button type='button' style={page === null ? segmentedActiveStyle : segmentedItemStyle} onClick={() => { setPage(null) }}>{tt('view.skills')}</button>
+          <button type='button' style={page === 'repos' ? segmentedActiveStyle : segmentedItemStyle} onClick={() => { setPage('repos') }}>{tt('view.repos')}</button>
+          {page === 'scenes' ? (
+            <button type='button' style={segmentedActiveStyle} title={tt('scenes.close')} aria-label={tt('scenes.close')} onClick={() => { setPage(null) }}>{tt('view.scenes')} ✕</button>
+          ) : null}
+        </span>
+      </div>
+
+      {page !== null ? (
         <ManagerView
+          section={page}
           skills={(catalog?.skills ?? []).map((skill) => skill.name)}
           onChanged={() => { void hub.reloadCatalog() }}
         />
-      ) : tab === 'trash' ? (
-        <TrashView hub={hub} />
       ) : catalog !== null ? (
         <>
           <div className={css.filterBar}>
-            {tab === 'general' ? (
-              <span className={css.segmented}>
-                <button type='button' className={css.segBtn + (generalView === 'all' ? ' ' + css.segBtnActive : '')} onClick={() => { setGeneralView('all') }}>{tt('view.all')}</button>
-                <button type='button' className={css.segBtn + (generalView === 'source' ? ' ' + css.segBtnActive : '')} onClick={() => { setGeneralView('source') }}>{tt('view.bySource')}</button>
-                <button type='button' className={css.segBtn + (generalView === 'location' ? ' ' + css.segBtnActive : '')} onClick={() => { setGeneralView('location') }}>{tt('view.byLocation')}</button>
-                <button type='button' className={css.segBtn + (generalView === 'scene' ? ' ' + css.segBtnActive : '')} onClick={() => { setGeneralView('scene') }}>{tt('view.byRole')}</button>
-              </span>
-            ) : null}
             <input className={css.search} value={search} onChange={(event) => { setSearch(event.target.value) }} placeholder={tt('panel.search')} />
             <button
               type='button'
@@ -458,17 +440,11 @@ export function SkillHubPanel(props: SkillHubPanelProps): React.JSX.Element {
             </div>
           ) : null}
 
-          {tab === 'general' && shownCount === 0 ? (
+          {shownCount === 0 ? (
             catalog.skills.length === 0 && catalog.disabled.length === 0 && catalog.diagnostics.length === 0
               ? <div className={css.empty}>{tt('panel.emptyAll')}</div>
               : <div className={css.empty}>{tt('panel.empty')}</div>
-          ) : null}
-
-          {tab === 'general' && generalView === 'all' ? <AllSkillsView hub={hub} /> : null}
-          {tab === 'general' && generalView === 'source' ? <SourcesView hub={hub} /> : null}
-          {tab === 'general' && generalView === 'location' ? <LocationsView hub={hub} /> : null}
-          {tab === 'general' && generalView === 'scene' ? <ScenesView hub={hub} scope='general' /> : null}
-          {tab === 'workspace' ? <WorkspaceView hub={hub} /> : null}
+          ) : <LibraryView hub={hub} />}
 
           {catalog.announcement !== undefined && catalog.announcement.skills > 0 ? (
             <p className={css.metaLine} title={tt('panel.announcementHint', { budget: catalog.announcement.budget })}>

@@ -20,7 +20,6 @@
  */
 
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
-import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
 // Type-only: pulls the Context merge for ctx.inputTriggers.
 import type {} from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 // Type-only: pulls the connection/reset event.
@@ -29,6 +28,14 @@ import type { InputTriggerServiceContract, InputTriggerSource } from '@deepseek-
 import type { HubSettingsValue } from '../protocol.ts'
 import type { SkillHubApi } from './api.ts'
 import { DEFAULT_DOT_MODEL_COLOR, DEFAULT_DOT_USER_COLOR } from './panel/format.ts'
+
+/**
+ * 设置作用域的最小结构（Runtime 包在 0.1.x 未随插件发布类型声明，故本地声明）。
+ * 运行时由 `ctx.settingsScope.bind({ namespace })` 返回。
+ */
+interface SettingsScope<T> {
+  getSnapshot(): { value?: T }
+}
 
 /** The core plugin's skill source identity on the '/' trigger. */
 const SKILL_SOURCE = { trigger: '/', name: 'skill' } as const
@@ -152,7 +159,7 @@ function injectDotsViaDOM(modelByName: Map<string, boolean>, modelColor: string,
  * @param scope - hub settings scope for the dot colors.
  * @returns a disposer restoring the original candidates.
  */
-export function wrapSkillSource(source: InputTriggerSource, api: SkillHubApi, scope: ConfigForm<HubSettingsValue>): () => void {
+export function wrapSkillSource(source: InputTriggerSource, api: SkillHubApi, scope: SettingsScope<HubSettingsValue>): () => void {
   const original = source.candidates
   source.candidates = async (session, req) => {
     const items = await original(session, req)
@@ -184,7 +191,7 @@ export function wrapSkillSource(source: InputTriggerSource, api: SkillHubApi, sc
 export function setupSkillSlashDots(
   ctx: ClientContext,
   api: SkillHubApi,
-  scope: ConfigForm<HubSettingsValue>,
+  scope: SettingsScope<HubSettingsValue>,
 ): () => void {
   const inputTriggers = ctx.get('inputTriggers')
   if (inputTriggers === undefined) return () => {}
