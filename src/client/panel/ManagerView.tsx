@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { GitAuthRef, GitRepoSource, RepoSkillManifestEntry, SceneManifest } from '../../protocol.ts'
 import { errorMessage } from '../helpers.ts'
+import { Toast } from './Toast.tsx'
 import {
   managerApi,
   type InstallProgress,
@@ -23,7 +24,7 @@ import {
 export interface ManagerViewProps {
   /** 当前页签：仓库管理或场景备份（一级 tab 已拆分，这里只渲染其一）。 */
   section: 'repos' | 'scenes'
-  /** 当前已安装技能名，用于上传与场景创建的选择器。 */
+  /** 当前已安装 skills 名，用于上传与场景创建的选择器。 */
   skills: string[]
   /** 安装/恢复成功后刷新目录。 */
   onChanged: () => void
@@ -46,8 +47,7 @@ const muted: React.CSSProperties = { fontSize: 12, opacity: 0.7 }
 const list: React.CSSProperties = { listStyle: 'none', margin: 0, padding: 0 }
 const item: React.CSSProperties = { ...box, marginBottom: 8 }
 const banner: React.CSSProperties = { ...box, borderColor: '#d9534f', color: '#a12f2b' }
-const success: React.CSSProperties = { ...box, borderColor: '#2e7d32', color: '#2e7d32' }
-/** 扫描结果卡片网格：一个技能一张卡，点卡片上的「安装」即装到本地技能库。 */
+/** 扫描结果卡片网格：一个 skills 一张卡，点卡片上的「安装」即装到本地 skills 库。 */
 const cardGrid: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 10, marginTop: 10 }
 const card: React.CSSProperties = {
   display: 'flex',
@@ -76,7 +76,7 @@ const desc: React.CSSProperties = {
 }
 const path: React.CSSProperties = { fontSize: 11, opacity: 0.55, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
 
-/** 同步结果摘要：具体列出变化的技能名（超过 6 个时折叠）。 */
+/** 同步结果摘要：具体列出变化的 skills 名（超过 6 个时折叠）。 */
 function describeDiff(diff: SkillDiff): string {
   const names = (list: string[]): string => (list.length > 6 ? list.slice(0, 6).join(', ') + ` 等 ${list.length} 个` : list.join(', '))
   const parts = [
@@ -84,7 +84,7 @@ function describeDiff(diff: SkillDiff): string {
     diff.updated.length > 0 ? `更新 ${names(diff.updated)}` : '',
     diff.removed.length > 0 ? `移除 ${names(diff.removed)}` : '',
   ].filter((part) => part !== '')
-  return parts.length > 0 ? parts.join('；') : '技能清单无变化'
+  return parts.length > 0 ? parts.join('；') : 'skills 清单无变化'
 }
 
 export function ManagerView(props: ManagerViewProps): React.JSX.Element {
@@ -144,11 +144,11 @@ export function ManagerView(props: ManagerViewProps): React.JSX.Element {
   return (
     <div>
       <div style={{ ...row, marginBottom: 12 }}>
-        <span style={muted}>{props.section === 'repos' ? '管理自有 Git 技能仓库：同步、下载与上传' : '把一组技能打成快照，备份到仓库或按需恢复'}</span>
+        <span style={muted}>{props.section === 'repos' ? '管理自有 Git skills 仓库：同步、下载与上传' : '把一组 skills 打成快照，备份到仓库或按需恢复'}</span>
       </div>
 
       {error !== null ? <div style={banner} role='alert'>{error}</div> : null}
-      {notice !== null ? <div style={success} role='status'>{notice}</div> : null}
+      <Toast message={notice} onDone={() => { setNotice(null) }} />
 
       {props.section === 'repos'
         ? <ReposSection
@@ -260,7 +260,7 @@ function ReposSection(props: SectionProps): React.JSX.Element {
     setScan({ skills: result.skills, commitSha: result.commitSha, ref: result.ref, source: repo.slug })
   }
 
-  /** 安装指定的技能集合；单张卡片安装与「全部安装」共用这条路径。 */
+  /** 安装指定的 skills 集合；单张卡片安装与「全部安装」共用这条路径。 */
   const startInstall = async (names: string[]): Promise<void> => {
     if (activeRepo === undefined || scan === null || names.length === 0) return
     const job = await managerApi.install({
@@ -302,7 +302,7 @@ function ReposSection(props: SectionProps): React.JSX.Element {
 
   const doUpload = async (): Promise<string> => {
     if (uploadSlug === '') throw new Error('请选择目标仓库')
-    if (uploadNames.size === 0) throw new Error('请选择要上传的技能')
+    if (uploadNames.size === 0) throw new Error('请选择要上传的 skills')
     const result = await managerApi.upload({
       slug: uploadSlug,
       names: [...uploadNames],
@@ -311,7 +311,7 @@ function ReposSection(props: SectionProps): React.JSX.Element {
     const rejected = result.rejected.length > 0
       ? '；被拒绝：' + result.rejected.map((entry) => entry.name + '（' + entry.reason + '）').join('、')
       : ''
-    return `已推送 ${result.uploaded.length} 个技能到 ${result.branch} @ ${result.commitSha.slice(0, 8)}${rejected}`
+    return `已推送 ${result.uploaded.length} 个 skills 到 ${result.branch} @ ${result.commitSha.slice(0, 8)}${rejected}`
   }
 
   return (
@@ -335,7 +335,7 @@ function ReposSection(props: SectionProps): React.JSX.Element {
         <p style={muted}>支持 GitHub / GitLab / Gitea / 通用 Git HTTP；仓库根目录需含 skill-manifest.json（缺失时自动扫描目录）。SSH Key 认证为后续扩展点。</p>
       </section>
 
-      {props.repos.length === 0 ? <div style={box}>还没有配置仓库。添加后即可扫描、下载、上传技能。</div> : null}
+      {props.repos.length === 0 ? <div style={box}>还没有配置仓库。添加后即可扫描、下载、上传 skills。</div> : null}
 
       <ul style={list}>
         {props.repos.map((repo) => (
@@ -362,7 +362,7 @@ function ReposSection(props: SectionProps): React.JSX.Element {
               <button type='button' style={danger} disabled={props.busy !== null} onClick={() => {
                 props.confirm({
                   title: '删除仓库配置',
-                  message: `将移除 ${repo.slug} 的连接配置（不会删除已安装的技能，也不会改动远端仓库）。`,
+                  message: `将移除 ${repo.slug} 的连接配置（不会删除已安装的 skills，也不会改动远端仓库）。`,
                   confirmLabel: '删除',
                   run: async () => { await props.run('delete:' + repo.slug, async () => { await managerApi.deleteRepo(repo.slug); await props.onRefresh(); return '仓库已删除' }) },
                 })
@@ -376,7 +376,7 @@ function ReposSection(props: SectionProps): React.JSX.Element {
         <section style={box}>
           <div style={row}>
             <strong>扫描结果 · {scan.source}</strong>
-            <span style={muted}>{scan.ref} @ {scan.commitSha.slice(0, 8)} · {scan.skills.length} 个技能</span>
+            <span style={muted}>{scan.ref} @ {scan.commitSha.slice(0, 8)} · {scan.skills.length} 个 skills</span>
             <span style={{ flex: 1 }} />
             <label style={muted}><input type='checkbox' checked={overwrite} onChange={(event) => { setOverwrite(event.target.checked) }} /> 覆盖已存在</label>
             {overwrite ? <label style={muted}><input type='checkbox' checked={allowLocalOverwrite} onChange={(event) => { setAllowLocalOverwrite(event.target.checked) }} /> 允许覆盖本地修改</label> : null}
@@ -386,8 +386,8 @@ function ReposSection(props: SectionProps): React.JSX.Element {
               disabled={props.busy !== null || scan.skills.length === 0 || installProgress?.status === 'running'}
               onClick={() => {
                 props.confirm({
-                  title: '安装全部技能',
-                  message: `从 ${scan.source} 安装 ${scan.skills.length} 个技能；同名技能${overwrite ? '将被覆盖（原版本进回收站）' : '会被跳过'}。`,
+                  title: '安装全部 skills',
+                  message: `从 ${scan.source} 安装 ${scan.skills.length} 个 skills；同名 skills${overwrite ? '将被覆盖（原版本进回收站）' : '会被跳过'}。`,
                   confirmLabel: '开始安装',
                   run: async () => { await props.run('install', async () => { await startInstall(scan.skills.map((entry) => entry.name)) }) },
                 })
@@ -395,7 +395,7 @@ function ReposSection(props: SectionProps): React.JSX.Element {
             >全部安装</button>
           </div>
 
-          {scan.skills.length === 0 ? <p style={muted}>该分支下没有发现技能目录（需要 `&lt;name&gt;/SKILL.md` 或 manifest 条目）。</p> : null}
+          {scan.skills.length === 0 ? <p style={muted}>该分支下没有发现 skills 目录（需要 `&lt;name&gt;/SKILL.md` 或 manifest 条目）。</p> : null}
           <div style={cardGrid}>
             {scan.skills.map((entry) => {
               const installed = props.skills.includes(entry.name)
@@ -415,8 +415,8 @@ function ReposSection(props: SectionProps): React.JSX.Element {
                       disabled={props.busy !== null || installProgress?.status === 'running'}
                       onClick={() => {
                         props.confirm({
-                          title: '安装技能 ' + entry.name,
-                          message: `从 ${scan.source} 安装 ${entry.name}${installed ? (overwrite ? '，覆盖本地同名技能（原版本进回收站）' : '，本地已存在，将跳过') : ''}。`,
+                          title: '安装 skills ' + entry.name,
+                          message: `从 ${scan.source} 安装 ${entry.name}${installed ? (overwrite ? '，覆盖本地同名 skills（原版本进回收站）' : '，本地已存在，将跳过') : ''}。`,
                           confirmLabel: '安装',
                           run: async () => { await props.run('install:' + entry.name, async () => { await startInstall([entry.name]) }) },
                         })
@@ -444,7 +444,7 @@ function ReposSection(props: SectionProps): React.JSX.Element {
       ) : null}
 
       <section style={box}>
-        <strong style={{ display: 'block', marginBottom: 8 }}>上传本地技能到仓库</strong>
+        <strong style={{ display: 'block', marginBottom: 8 }}>上传本地 skills 到仓库</strong>
         <div style={{ ...row, marginBottom: 8 }}>
           <select style={input} value={uploadSlug} onChange={(event) => { setUploadSlug(event.target.value) }}>
             <option value=''>选择目标仓库</option>
@@ -453,15 +453,15 @@ function ReposSection(props: SectionProps): React.JSX.Element {
           <input style={input} placeholder='仓库内目录（skills）' value={uploadDir} onChange={(event) => { setUploadDir(event.target.value) }} />
           <button type='button' style={primary} disabled={props.busy !== null || uploadNames.size === 0} onClick={() => {
             props.confirm({
-              title: '推送技能到仓库',
-              message: `将 ${uploadNames.size} 个本地技能推送到所选仓库（上传前会做内容审计，命中阻断规则会被拒绝）。`,
+              title: '推送 skills 到仓库',
+              message: `将 ${uploadNames.size} 个本地 skills 推送到所选仓库（上传前会做内容审计，命中阻断规则会被拒绝）。`,
               confirmLabel: '推送',
               run: async () => { await props.run('upload', doUpload) },
             })
           }}>推送 {uploadNames.size} 个</button>
         </div>
         <div style={{ ...row, maxHeight: 180, overflow: 'auto' }}>
-          {props.skills.length === 0 ? <span style={muted}>没有可上传的本地技能。</span> : props.skills.map((name) => (
+          {props.skills.length === 0 ? <span style={muted}>没有可上传的本地 skills。</span> : props.skills.map((name) => (
             <label key={name} style={{ ...muted, fontSize: 12 }}>
               <input
                 type='checkbox'
@@ -516,7 +516,7 @@ function ScenesSection(props: ScenesProps): React.JSX.Element {
   const create = async (): Promise<string> => {
     if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(sceneId)) throw new Error('场景 id 只能是小写字母、数字和连字符')
     if (sceneName.trim() === '') throw new Error('请填写场景名称')
-    if (members.size === 0) throw new Error('请至少选择一个技能')
+    if (members.size === 0) throw new Error('请至少选择一个 skills')
     await managerApi.createScene({
       id: sceneId,
       name: sceneName.trim(),
@@ -563,7 +563,7 @@ function ScenesSection(props: ScenesProps): React.JSX.Element {
   return (
     <div>
       <section style={box}>
-        <strong style={{ display: 'block', marginBottom: 8 }}>从当前技能创建场景</strong>
+        <strong style={{ display: 'block', marginBottom: 8 }}>从当前 skills 创建场景</strong>
         <div style={{ ...row, marginBottom: 8 }}>
           <input style={input} placeholder='场景 id（kebab-case，如 embedded-rpi）' value={sceneId} onChange={(event) => { setSceneId(event.target.value) }} />
           <input style={input} placeholder='名称' value={sceneName} onChange={(event) => { setSceneName(event.target.value) }} />
@@ -572,7 +572,7 @@ function ScenesSection(props: ScenesProps): React.JSX.Element {
           <button type='button' style={primary} disabled={props.busy !== null} onClick={() => { void props.run('create-scene', create) }}>创建</button>
         </div>
         <div style={{ ...row, marginBottom: 6 }}>
-          <input style={input} placeholder='筛选技能…' value={search} onChange={(event) => { setSearch(event.target.value) }} />
+          <input style={input} placeholder='筛选 skills…' value={search} onChange={(event) => { setSearch(event.target.value) }} />
           <button type='button' style={button} onClick={() => { setMembers(new Set(visibleSkills)) }}>全选</button>
           <button type='button' style={button} onClick={() => { setMembers(new Set()) }}>清空</button>
           <span style={muted}>已选 {members.size}</span>
@@ -594,7 +594,7 @@ function ScenesSection(props: ScenesProps): React.JSX.Element {
               /> {name}
             </label>
           ))}
-          {visibleSkills.length === 0 ? <span style={muted}>没有匹配的本地技能。</span> : null}
+          {visibleSkills.length === 0 ? <span style={muted}>没有匹配的本地 skills。</span> : null}
         </div>
       </section>
 
@@ -604,7 +604,7 @@ function ScenesSection(props: ScenesProps): React.JSX.Element {
           <option value=''>选择仓库</option>
           {props.repos.map((repo) => <option key={repo.slug} value={repo.slug}>{repo.slug}</option>)}
         </select>
-        <span style={muted}>备份会把 scene.json 与技能快照推送到仓库的场景目录。</span>
+        <span style={muted}>备份会把 scene.json 与 skills 快照推送到仓库的场景目录。</span>
       </section>
 
       {props.scenes.length === 0 ? <div style={box}>还没有场景。</div> : null}
@@ -649,7 +649,7 @@ function ScenesSection(props: ScenesProps): React.JSX.Element {
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60 }}>
           <div style={{ background: 'var(--dsh-bg, #fff)', borderRadius: 10, padding: 18, width: 560, maxWidth: '94vw', maxHeight: '86vh', overflow: 'auto' }} role='dialog' aria-modal='true'>
             <h3 style={{ margin: '0 0 4px', fontSize: 15 }}>恢复场景：{plan.scene.name}</h3>
-            <p style={{ ...muted, margin: '0 0 12px' }}>逐项确认要覆盖的内容；默认跳过已存在的技能，绝不静默覆盖。</p>
+            <p style={{ ...muted, margin: '0 0 12px' }}>逐项确认要覆盖的内容；默认跳过已存在的 skills，绝不静默覆盖。</p>
             <ul style={list}>
               {plan.conflicts.map((conflict) => (
                 <li key={conflict.name} style={{ ...item, padding: 10 }}>

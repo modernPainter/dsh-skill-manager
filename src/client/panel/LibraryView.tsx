@@ -211,8 +211,8 @@ function SkillCard({ skill, origin, useCount, hubConfig, busy, duplicate, hub }:
           type='button'
           role='switch'
           aria-checked={!disabled}
-          aria-label={disabled ? '启用技能' : '停用技能'}
-          title={disabled ? '启用技能' : '停用技能'}
+          aria-label={disabled ? '启用 skills' : '停用 skills'}
+          title={disabled ? '启用 skills' : '停用 skills'}
           disabled={busy}
           style={disabled ? SWITCH : { ...SWITCH, ...SWITCH_ON }}
           onClick={(event) => { event.stopPropagation(); void hub.toggle(skill, disabled) }}

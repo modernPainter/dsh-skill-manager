@@ -93,7 +93,7 @@ export interface Config {
  * every wire read.
  */
 const ConfigFields = {
-  enabled: z.boolean().default(HUB_CONFIG_DEFAULTS.enabled).description('关闭后技能中枢的路由、入口与公告全部下线。'),
+  enabled: z.boolean().default(HUB_CONFIG_DEFAULTS.enabled).description('关闭后 skills管理 的路由、入口与公告全部下线。'),
   announceToAgent: z.boolean().default(HUB_CONFIG_DEFAULTS.announceToAgent).description('在系统提示中加入本插件说明，用户提到技能管理时 Agent 知道如何协作。'),
   dotModelColor: z.string().pattern(HEX_COLOR_RE).description('技能行与聊天「/」菜单中「模型可调」圆点的颜色（#rrggbb）。'),
   dotUserColor: z.string().pattern(HEX_COLOR_RE).description('技能行与聊天「/」菜单中「仅用户可调」圆点的颜色（#rrggbb）。'),
@@ -220,7 +220,7 @@ function registerAgentSkillPolicy(
 
 /** Model-facing announcement: plugin presence, capabilities, and limits. */
 export const SKILL_HUB_GUIDANCE =
-  "本机已安装 dsh-skill-hub 插件（DSH Web GUI 技能中枢）：管理主页在 设置 →「技能中枢」（通用 / 工作区 / 市场 / 回收站），配置卡片在插件管理页（折叠，点标题展开）。能力：全量技能目录的浏览与搜索（项目 / 用户 / 内置及第三方）、按来源 / 目录 / 角色整组启停、市场安装、来源跟踪与同步、跨 agent 与 ZIP 导入、调用统计、诊断与内容审计。限制：只有用户级技能能写能删；所有开关都只写 sidecar 覆盖（关闭模型自动调用，「/技能名」仍可用，源文件不动），内置与运行时技能只读，即时生效无需重启。用户提到「技能管理 / 技能列表 / 技能开关 / 技能同步 / 技能市场 / 更新技能 / 新建技能」时即指本插件，请据此协作。"
+  "本机已安装 dsh-skill-hub 插件（DSH Web GUI skills管理）：管理主页在 设置 →「skills管理」（通用 / 工作区 / 市场 / 回收站），配置卡片在插件管理页（折叠，点标题展开）。能力：全量 skills 目录的浏览与搜索（项目 / 用户 / 内置及第三方）、按来源 / 目录 / 角色整组启停、市场安装、来源跟踪与同步、跨 agent 与 ZIP 导入、调用统计、诊断与内容审计。限制：只有用户级 skills 能写能删；所有开关都只写 sidecar 覆盖（关闭模型自动调用，「/技能名」仍可用，源文件不动），内置与运行时 skills 只读，即时生效无需重启。用户提到「skills管理 / skills列表 / skills开关 / skills同步 / skills市场 / 更新skills / 新建skills」时即指本插件，请据此协作。"
 
 /**
  * Mount the skill hub routes and announcement.

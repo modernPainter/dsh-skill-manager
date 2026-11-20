@@ -1,12 +1,12 @@
-/** 技能详情。从 locales.ts 按前缀拆出，键集合不变。 */
+/** skills 详情。从 locales.ts 按前缀拆出，键集合不变。 */
 export const zhDetail = {
-  'detail.copyMention': '复制 /技能名',
-  'detail.copyMentionHint': '复制后粘贴到对话里，可显式调用该技能',
+  'detail.copyMention': '复制斜杠命令',
+  'detail.copyMentionHint': '复制后粘贴到对话里，可显式调用该 skills',
   'detail.copyPath': '复制路径',
   'detail.copied': '已复制',
   'detail.back': '返回列表',
   'detail.close': '关闭',
-  'detail.title': '技能详情',
+  'detail.title': 'skills 详情',
   'detail.provider': '提供者',
   'detail.source': '位置',
   'detail.addedAt': '添加时间',
@@ -16,7 +16,7 @@ export const zhDetail = {
   'detail.argumentHint': '参数提示',
   'detail.uses': '调用次数',
   'detail.groups': '所属分组',
-  'detail.loading': '读取技能正文…',
+  'detail.loading': '读取 skills 正文…',
 } as const
 
 export const enDetail: Record<keyof typeof zhDetail, string> = {

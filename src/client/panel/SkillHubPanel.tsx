@@ -21,6 +21,7 @@ import { SkillDetailView } from './SkillDetailView.tsx'
 import { TagEditorView } from './TagEditorView.tsx'
 import { LibraryView } from './LibraryView.tsx'
 import { ManagerView } from './ManagerView.tsx'
+import { Toast } from './Toast.tsx'
 import { PanelDialogs } from './PanelDialogs.tsx'
 import { ForeignImportDialog } from './ForeignImportDialog.tsx'
 import { CreateSkillDialog } from './CreateSkillDialog.tsx'
@@ -324,12 +325,7 @@ export function SkillHubPanel(props: SkillHubPanelProps): React.JSX.Element {
         </div>
       ) : null}
 
-      {successBanner !== null ? (
-        <div className={css.successBanner} role='status'>
-          <span>{successBanner}</span>
-          <button type='button' className={css.button} aria-label={tt('err.dismiss')} onClick={() => { setSuccessBanner(null) }}>{tt('err.dismiss')}</button>
-        </div>
-      ) : null}
+      {successBanner !== null ? <Toast message={successBanner} onDone={() => { setSuccessBanner(null) }} /> : null}
 
       {loading ? (
         <div className={css.skeleton} role='status' aria-label={tt('panel.loading')}>
