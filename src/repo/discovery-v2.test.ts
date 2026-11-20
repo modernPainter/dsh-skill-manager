@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { diffSkillSets, mergeManifestAndScan, parseManifest, scanFromTree } from './discovery-v2.ts'
+import { mergeManifestAndScan, parseManifest, scanFromTree } from './discovery-v2.ts'
 import { buildApiBase, detectBackend, extractSlug } from './git-client.ts'
 
 describe('manifest 解析', () => {
@@ -48,18 +48,6 @@ describe('目录扫描与合并', () => {
     )
     expect(merged.map((entry) => entry.name)).toEqual(['alpha', 'beta', 'gamma'])
     expect(merged[0].path).toBe('custom/place/alpha')
-  })
-})
-
-describe('更新 diff', () => {
-  it('按 path/version/auditHash 归类新增、更新、移除', () => {
-    const diff = diffSkillSets(
-      [{ name: 'a', path: 'skills/a' }, { name: 'b', path: 'skills/b', version: '1.0.0' }, { name: 'c', path: 'skills/c' }],
-      [{ name: 'a', path: 'skills/a' }, { name: 'b', path: 'skills/b', version: '1.1.0' }, { name: 'd', path: 'skills/d' }],
-    )
-    expect(diff.added).toEqual(['d'])
-    expect(diff.updated).toEqual(['b'])
-    expect(diff.removed).toEqual(['c'])
   })
 })
 

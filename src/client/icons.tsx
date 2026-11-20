@@ -31,6 +31,19 @@ export function IconChevronDownOutline14({ size = 14, className }: IconProps): J
   )
 }
 
+/** ic_scan_outline_16（扫描：四角取景框 + 中线） */
+export function IconScanOutline16({ size = 16, className }: IconProps): JSX.Element {
+  return (
+    <svg width={size} height={size} className={className} viewBox='0 0 16 16' fill='none' xmlns='http://www.w3.org/2000/svg'>
+      <path d='M2 5.2V3.8C2 2.80589 2.80589 2 3.8 2H5.2' stroke='currentColor' strokeWidth='1.2' strokeLinecap='round' />
+      <path d='M10.8 2H12.2C13.1941 2 14 2.80589 14 3.8V5.2' stroke='currentColor' strokeWidth='1.2' strokeLinecap='round' />
+      <path d='M14 10.8V12.2C14 13.1941 13.1941 14 12.2 14H10.8' stroke='currentColor' strokeWidth='1.2' strokeLinecap='round' />
+      <path d='M5.2 14H3.8C2.80589 14 2 13.1941 2 12.2V10.8' stroke='currentColor' strokeWidth='1.2' strokeLinecap='round' />
+      <path d='M2 8H14' stroke='currentColor' strokeWidth='1.2' strokeLinecap='round' />
+    </svg>
+  )
+}
+
 /** ic_ds_trash_outline_16 */
 export function IconTrashOutline16({ size = 16, className }: IconProps): JSX.Element {
   return (

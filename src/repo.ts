@@ -71,7 +71,6 @@ export {
   parseManifest,
   scanFromTree,
   mergeManifestAndScan,
-  diffSkillSets,
 } from './repo/discovery-v2.ts'
 
 export {

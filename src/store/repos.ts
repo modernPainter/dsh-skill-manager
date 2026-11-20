@@ -212,7 +212,7 @@ export class ReposStore {
     }
   }
 
-  async updateRepoSyncState(slug: string, patch: { lastCommitSha?: string; lastCheckedAt?: number; manifest?: RepoSkillManifest }): Promise<GitRepoSource | undefined> {
+  async updateRepoScanState(slug: string, patch: { lastCommitSha?: string; lastCheckedAt?: number; manifest?: RepoSkillManifest }): Promise<GitRepoSource | undefined> {
     await this.ensureLoaded()
     const repo = this.state.repos.find((r) => r.slug === slug)
     if (repo === undefined) return undefined

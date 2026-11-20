@@ -204,34 +204,3 @@ export function mergeManifestAndScan(manifestEntries: readonly RepoSkillManifest
   }
   return result.sort((a, b) => a.name.localeCompare(b.name))
 }
-
-/** 计算两个 manifest / 快照之间的 diff —— 用于更新检查。 */
-export function diffSkillSets(
-  baseline: readonly RepoSkillManifestEntry[],
-  latest: readonly RepoSkillManifestEntry[],
-): { added: string[]; updated: string[]; removed: string[] } {
-  const baselineMap = new Map(baseline.map((e) => [e.name, e]))
-  const latestMap = new Map(latest.map((e) => [e.name, e]))
-  const added: string[] = []
-  const updated: string[] = []
-  const removed: string[] = []
-
-  for (const [name, latestEntry] of latestMap) {
-    const base = baselineMap.get(name)
-    if (base === undefined) {
-      added.push(name)
-    } else if (base.path !== latestEntry.path) {
-      updated.push(name)
-    } else if (base.version !== latestEntry.version) {
-      updated.push(name)
-    } else if (base.auditHash !== latestEntry.auditHash) {
-      updated.push(name)
-    }
-  }
-
-  for (const name of baselineMap.keys()) {
-    if (!latestMap.has(name)) removed.push(name)
-  }
-
-  return { added, updated, removed }
-}

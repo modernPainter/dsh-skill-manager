@@ -51,7 +51,7 @@ export interface GitRepoSource {
   manifestPath: string
   /** 仓库级标签（用于 GUI 分组筛选）。 */
   tags?: readonly string[]
-  /** 最后一次成功拉取的 commit SHA（用于 diffRemoteSkills）。 */
+  /** 最后一次成功拉取的 commit SHA。 */
   lastCommitSha?: string
   /** 最后一次成功拉取的时间戳。 */
   lastCheckedAt?: number

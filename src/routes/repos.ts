@@ -15,7 +15,7 @@ import { join } from 'node:path'
 import { SKILL_MANAGER_API, type GitRepoSource, type RepoScanResult, type RepoSkillManifestEntry } from '../protocol.ts'
 import { errorText } from '../error-text.ts'
 import { apiUrl, extractSlug, fetchJson, RepoFetchError } from '../repo/git-client.ts'
-import { fetchRepoTreeBlobs, diffSkillSets, mergeManifestAndScan, parseManifest, scanFromTree } from '../repo/discovery-v2.ts'
+import { fetchRepoTreeBlobs, mergeManifestAndScan, parseManifest, scanFromTree } from '../repo/discovery-v2.ts'
 import { downloadRepoFile } from '../repo/install-v2.ts'
 import { readSkillBundle } from '../repo/local-bundle.ts'
 import { pushFiles, readRepoFile, type PushFile } from '../repo/push.ts'
@@ -255,31 +255,13 @@ export function repoV2Routes(deps: RepoRouteDeps): RouteSpec[] {
         const ref = queryParam(url, 'ref') || repo.defaultBranch
         const scan = await scanRepoCore(repos, slug, ref)
         const { tree, ...rest } = scan
-        writeJson(res, 200, { ok: true, ...rest, fileCount: tree.length })
-      },
-    },
-
-    // ─────────────────────────── 同步快照
-    {
-      path: SKILL_MANAGER_API.repoSync,
-      methods: ['POST'],
-      jsonBody: true,
-      handler: async ({ res, body }) => {
-        const slug = readString(body, 'slug').trim()
-        const repo = await requireRepo(slug)
-        if (repo === undefined) { writeError(res, 404, 'repo not found: ' + slug); return }
-        const ref = readString(body, 'ref').trim() || repo.defaultBranch
-        const scan = await scanRepoCore(repos, slug, ref)
-        const previous = repo.lastCommitSha
-        // 与上次同步的 manifest 快照对比，告诉界面到底哪些技能变了。
-        const firstSync = repo.manifest === undefined
-        const diff = diffSkillSets(repo.manifest?.skills ?? [], scan.skills)
-        await repos.updateRepoSyncState(slug, {
+        // 扫描即记录快照：界面上「最近扫描」与上次 commit 都从这里来。
+        await repos.updateRepoScanState(slug, {
           lastCommitSha: scan.commitSha,
           lastCheckedAt: Date.now(),
           ...(scan.manifest !== undefined ? { manifest: scan.manifest } : {}),
         })
-        writeJson(res, 200, { ok: true, commitSha: scan.commitSha, ref, changed: previous !== scan.commitSha, firstSync, skills: scan.skills, diff })
+        writeJson(res, 200, { ok: true, ...rest, fileCount: tree.length })
       },
     },
 

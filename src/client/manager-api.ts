@@ -91,13 +91,6 @@ export interface UploadResult {
   fileCount: number
 }
 
-/** 同步结果里的技能清单变化（相对上次同步的 manifest 快照）。 */
-export interface SkillDiff {
-  added: string[]
-  updated: string[]
-  removed: string[]
-}
-
 export interface BackupResult {
   ok: true
   scene: SceneManifest
@@ -141,7 +134,6 @@ export const managerApi = {
   deleteRepo: (slug: string) => post<ReposPayload>(SKILL_MANAGER_API.repoDelete, { slug }),
   testRepo: (slug: string) => get<{ ok: boolean; backend?: string; defaultBranch?: string; error?: string }>(SKILL_MANAGER_API.repoTest, { slug }, NETWORK_TIMEOUT_MS),
   scanRepo: (slug: string, ref?: string) => get<RepoScanResult & { ok: true; fileCount: number }>(SKILL_MANAGER_API.repoScan, { slug, ref }, NETWORK_TIMEOUT_MS),
-  syncRepo: (slug: string, ref?: string) => post<{ ok: true; commitSha: string; ref: string; changed: boolean; firstSync: boolean; diff: SkillDiff }>(SKILL_MANAGER_API.repoSync, { slug, ref }),
   install: (input: { slug: string; ref?: string; names: string[]; overwrite?: boolean; allowLocalOverwrite?: boolean }) =>
     post<{ ok: true; jobId: string; total: number; commitSha: string }>(SKILL_MANAGER_API.repoInstall, input, INSTALL_TIMEOUT_MS),
   installProgress: (jobId: string) => get<InstallProgress>(SKILL_MANAGER_API.repoInstallProgress, { jobId }, LOCAL_TIMEOUT_MS),

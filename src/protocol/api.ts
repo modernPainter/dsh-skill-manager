@@ -85,8 +85,6 @@ export const SKILL_MANAGER_API = {
   repoTest: '/api/skill-manager/repos/test',
   /** 扫描仓库（GET，?slug=&ref=）。 */
   repoScan: '/api/skill-manager/repos/scan',
-  /** 同步快照（POST）。 */
-  repoSync: '/api/skill-manager/repos/sync',
   /** 安装技能（POST，异步任务）。 */
   repoInstall: '/api/skill-manager/repos/install',
   /** 安装进度（GET，?jobId=）。 */

@@ -10,15 +10,15 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { GitAuthRef, GitRepoSource, RepoSkillManifestEntry, SceneManifest } from '../../protocol.ts'
+import type { GitRepoSource, RepoSkillManifestEntry, SceneManifest } from '../../protocol.ts'
 import { errorMessage } from '../helpers.ts'
 import { Toast } from './Toast.tsx'
+import { IconChevronDownOutline14, IconScanOutline16 } from '../icons.tsx'
 import {
   managerApi,
   type InstallProgress,
   type RestorePlanResult,
   type SceneRemoteRef,
-  type SkillDiff,
 } from '../manager-api.ts'
 
 export interface ManagerViewProps {
@@ -57,11 +57,23 @@ function repoDisplayName(slug: string): string {
   return parts.length >= 3 ? parts.slice(-2).join('/') : slug
 }
 
+/** 令牌标签按仓库域名生成，避免把令牌内容当标签展示。 */
+function authLabelFor(repoUrl: string): string {
+  const value = repoUrl.trim()
+  try {
+    return new URL(/^https?:\/\//i.test(value) ? value : 'https://' + value).hostname
+  } catch {
+    return '个人访问令牌'
+  }
+}
+
 const box: React.CSSProperties = { border: '1px solid var(--dsh-border, #d9d9d9)', borderRadius: 8, padding: 12, marginBottom: 12 }
 const row: React.CSSProperties = { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }
 const input: React.CSSProperties = { padding: '6px 8px', border: '1px solid var(--dsh-border, #d9d9d9)', borderRadius: 6, fontSize: 13, minWidth: 180 }
 const button: React.CSSProperties = { padding: '5px 10px', border: '1px solid var(--dsh-border, #d9d9d9)', borderRadius: 6, background: 'transparent', cursor: 'pointer', fontSize: 13 }
 const primary: React.CSSProperties = { ...button, borderColor: 'var(--dsh-accent, #3b82f6)', color: 'var(--dsh-accent, #3b82f6)' }
+/** 带图标的小按钮：图标与文字垂直居中，间距 4px。 */
+const buttonWithIcon: React.CSSProperties = { ...button, display: 'inline-flex', alignItems: 'center', gap: 4 }
 const danger: React.CSSProperties = { ...button, borderColor: '#d9534f', color: '#d9534f' }
 const muted: React.CSSProperties = { fontSize: 12, opacity: 0.7 }
 const list: React.CSSProperties = { listStyle: 'none', margin: 0, padding: 0 }
@@ -96,20 +108,8 @@ const desc: React.CSSProperties = {
 }
 const path: React.CSSProperties = { fontSize: 11, opacity: 0.55, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
 
-/** 同步结果摘要：具体列出变化的 skills 名（超过 6 个时折叠）。 */
-function describeDiff(diff: SkillDiff): string {
-  const names = (list: string[]): string => (list.length > 6 ? list.slice(0, 6).join(', ') + ` 等 ${list.length} 个` : list.join(', '))
-  const parts = [
-    diff.added.length > 0 ? `新增 ${names(diff.added)}` : '',
-    diff.updated.length > 0 ? `更新 ${names(diff.updated)}` : '',
-    diff.removed.length > 0 ? `移除 ${names(diff.removed)}` : '',
-  ].filter((part) => part !== '')
-  return parts.length > 0 ? parts.join('；') : 'skills 清单无变化'
-}
-
 export function ManagerView(props: ManagerViewProps): React.JSX.Element {
   const [repos, setRepos] = useState<GitRepoSource[]>([])
-  const [auths, setAuths] = useState<GitAuthRef[]>([])
   const [scenes, setScenes] = useState<SceneManifest[]>([])
   const [sceneRemotes, setSceneRemotes] = useState<Record<string, SceneRemoteRef>>({})
   const [error, setError] = useState<string | null>(null)
@@ -134,7 +134,6 @@ export function ManagerView(props: ManagerViewProps): React.JSX.Element {
     try {
       const payload = await managerApi.listRepos()
       setRepos(payload.repos)
-      setAuths(payload.auths)
       await loadScenes()
     } catch (caught) {
       // 离线：仓库配置读不到时给出明确提示，但仍尝试展示本地场景。
@@ -164,7 +163,7 @@ export function ManagerView(props: ManagerViewProps): React.JSX.Element {
   return (
     <div>
       <div style={{ ...row, marginBottom: 12 }}>
-        <span style={muted}>{props.section === 'repos' ? '管理自有 Git skills 仓库：同步、下载与上传' : '把一组 skills 打成快照，备份到仓库或按需恢复'}</span>
+        <span style={muted}>{props.section === 'repos' ? '管理自有 Git skills 仓库：扫描、安装与上传' : '把一组 skills 打成快照，备份到仓库或按需恢复'}</span>
       </div>
 
       {error !== null ? <div style={banner} role='alert'>{error}</div> : null}
@@ -173,7 +172,6 @@ export function ManagerView(props: ManagerViewProps): React.JSX.Element {
       {props.section === 'repos'
         ? <ReposSection
             repos={repos}
-            auths={auths}
             skills={props.skills}
             busy={busy}
             onRefresh={refresh}
@@ -221,7 +219,6 @@ export function ManagerView(props: ManagerViewProps): React.JSX.Element {
 
 interface SectionProps {
   repos: GitRepoSource[]
-  auths: GitAuthRef[]
   skills: string[]
   busy: string | null
   onRefresh: () => Promise<void>
@@ -234,9 +231,9 @@ function ReposSection(props: SectionProps): React.JSX.Element {
   const [url, setUrl] = useState('')
   const [branch, setBranch] = useState('')
   const [scenesPath, setScenesPath] = useState('')
-  const [authId, setAuthId] = useState('')
-  const [tokenLabel, setTokenLabel] = useState('')
   const [token, setToken] = useState('')
+  /** 低频字段（分支、目录、令牌）收进「高级选项」，默认只露仓库地址。 */
+  const [advancedOpen, setAdvancedOpen] = useState(false)
 
   const [activeSlug, setActiveSlug] = useState<string | null>(null)
   const [scan, setScan] = useState<{ skills: readonly RepoSkillManifestEntry[]; commitSha: string; ref: string; source: string } | null>(null)
@@ -255,16 +252,15 @@ function ReposSection(props: SectionProps): React.JSX.Element {
 
   const addRepo = async (): Promise<string> => {
     if (url.trim() === '') throw new Error('请填写仓库 URL')
-    let auth = authId
+    let authId: string | undefined
     if (token.trim() !== '') {
-      const created = await managerApi.addAuth(tokenLabel.trim() || '个人访问令牌', token.trim())
-      auth = created.auth.id
+      const created = await managerApi.addAuth(authLabelFor(url), token.trim())
+      authId = created.auth.id
       setToken('')
-      setTokenLabel('')
     }
     await managerApi.addRepo({
       url: url.trim(),
-      ...(auth !== '' ? { authId: auth } : {}),
+      ...(authId !== undefined ? { authId } : {}),
       ...(branch.trim() !== '' ? { defaultBranch: branch.trim() } : {}),
       ...(scenesPath.trim() !== '' ? { scenesPath: scenesPath.trim() } : {}),
     })
@@ -278,6 +274,7 @@ function ReposSection(props: SectionProps): React.JSX.Element {
     setScan(null)
     const result = await managerApi.scanRepo(repo.slug)
     setScan({ skills: result.skills, commitSha: result.commitSha, ref: result.ref, source: repo.slug })
+    await props.onRefresh()
   }
 
   /** 安装指定的 skills 集合；单张卡片安装与「全部安装」共用这条路径。 */
@@ -337,22 +334,35 @@ function ReposSection(props: SectionProps): React.JSX.Element {
   return (
     <div>
       <section style={box}>
-        <strong style={{ display: 'block', marginBottom: 8 }}>添加自有仓库</strong>
-        <div style={{ ...row, marginBottom: 8 }}>
-          <input style={{ ...input, flex: 1, minWidth: 260 }} placeholder='https://git.company.com/team/skills' value={url} onChange={(event) => { setUrl(event.target.value) }} />
-          <input style={input} placeholder='默认分支（main）' value={branch} onChange={(event) => { setBranch(event.target.value) }} />
-          <input style={input} placeholder='场景目录（scenes）' value={scenesPath} onChange={(event) => { setScenesPath(event.target.value) }} />
+        <strong style={{ display: 'block', marginBottom: 8 }}>添加仓库</strong>
+        <div style={{ ...row, marginBottom: advancedOpen ? 8 : 0 }}>
+          <input style={{ ...input, flex: 1, minWidth: 260 }} placeholder='粘贴仓库地址，如 https://github.com/anthropics/skills' value={url} onChange={(event) => { setUrl(event.target.value) }} />
+          <button type='button' style={primary} disabled={props.busy !== null} onClick={() => { void props.run('add-repo', addRepo) }}>保存</button>
+          <button type='button' style={buttonWithIcon} onClick={() => { setAdvancedOpen((value) => !value) }}>
+            <span style={{ display: 'inline-flex', transform: advancedOpen ? 'rotate(180deg)' : 'none', transition: 'transform 120ms ease' }}>
+              <IconChevronDownOutline14 />
+            </span>
+            {advancedOpen ? '收起高级选项' : '高级选项'}
+          </button>
         </div>
-        <div style={{ ...row, marginBottom: 8 }}>
-          <select style={input} value={authId} onChange={(event) => { setAuthId(event.target.value) }}>
-            <option value=''>不使用已有凭据</option>
-            {props.auths.map((auth) => <option key={auth.id} value={auth.id}>{auth.label}</option>)}
-          </select>
-          <input style={input} placeholder='新令牌标签（可选）' value={tokenLabel} onChange={(event) => { setTokenLabel(event.target.value) }} />
-          <input style={input} type='password' placeholder='HTTPS Token（写入后不再回显）' value={token} onChange={(event) => { setToken(event.target.value) }} />
-          <button type='button' style={primary} disabled={props.busy !== null} onClick={() => { void props.run('add-repo', addRepo) }}>保存仓库</button>
-        </div>
-        <p style={muted}>支持 GitHub / GitLab / Gitea / 云效 Codeup / 通用 Git HTTP；仓库根目录需含 skill-manifest.json（缺失时自动扫描目录）。SSH Key 认证为后续扩展点。</p>
+        {advancedOpen ? (
+          <>
+            <div style={{ ...row, marginBottom: 8 }}>
+              <input style={input} placeholder='默认分支（main）' value={branch} onChange={(event) => { setBranch(event.target.value) }} />
+              <input style={input} placeholder='场景目录（scenes）' value={scenesPath} onChange={(event) => { setScenesPath(event.target.value) }} />
+            </div>
+            <div style={{ ...row, marginBottom: 8 }}>
+              <input
+                style={{ ...input, flex: 1, minWidth: 260 }}
+                type='password'
+                placeholder='HTTPS Token（可选，仅存本机，不会回显）'
+                value={token}
+                onChange={(event) => { setToken(event.target.value) }}
+              />
+            </div>
+          </>
+        ) : null}
+        <p style={muted}>支持 GitHub / GitLab / Gitea / 云效 Codeup；仓库根目录可含 skill-manifest.json，缺失时自动扫描目录。</p>
       </section>
 
       {props.repos.length === 0 ? <div style={box}>还没有配置仓库。添加后即可扫描、下载、上传 skills。</div> : null}
@@ -363,22 +373,15 @@ function ReposSection(props: SectionProps): React.JSX.Element {
             <div style={row}>
               <strong title={repo.slug}>{repoDisplayName(repo.slug)}</strong>
               <span style={muted}>{backendLabel(repo.backend)} · {repo.defaultBranch}</span>
-              <span style={muted}>{repo.manifest !== undefined ? repo.manifest.skills.length + ' skills' : '未扫描'}</span>
-              {repo.lastCheckedAt !== undefined ? <span style={muted}>最近同步 {new Date(repo.lastCheckedAt).toLocaleString()}</span> : null}
+              {repo.lastCheckedAt !== undefined ? <span style={muted}>最近扫描 {new Date(repo.lastCheckedAt).toLocaleString()}</span> : null}
               <span style={{ flex: 1 }} />
               <button type='button' style={button} disabled={props.busy !== null} onClick={() => { void props.run('test:' + repo.slug, async () => {
                 const result = await managerApi.testRepo(repo.slug)
                 return result.ok ? `连接正常（${backendLabel(result.backend ?? repo.backend)}，默认分支 ${result.defaultBranch ?? repo.defaultBranch}）` : '连接失败：' + (result.error ?? '未知原因')
               }) }}>测试连接</button>
-              <button type='button' style={button} disabled={props.busy !== null} onClick={() => { void props.run('scan:' + repo.slug, async () => { await doScan(repo); return undefined }) }}>扫描</button>
-              <button type='button' style={button} disabled={props.busy !== null} onClick={() => { void props.run('sync:' + repo.slug, async () => {
-                const result = await managerApi.syncRepo(repo.slug)
-                await props.onRefresh()
-                const at = `${result.commitSha.slice(0, 8)}，${result.ref}`
-                if (result.firstSync) return `已记录当前快照（${at}）：${describeDiff(result.diff)}`
-                if (!result.changed) return `已是最新（${at}）`
-                return `发现新提交（${at}）：${describeDiff(result.diff)}`
-              }) }}>同步</button>
+              <button type='button' style={buttonWithIcon} disabled={props.busy !== null} onClick={() => { void props.run('scan:' + repo.slug, async () => { await doScan(repo); return undefined }) }}>
+                <IconScanOutline16 size={14} />扫描
+              </button>
               <button type='button' style={danger} disabled={props.busy !== null} onClick={() => {
                 props.confirm({
                   title: '删除仓库配置',

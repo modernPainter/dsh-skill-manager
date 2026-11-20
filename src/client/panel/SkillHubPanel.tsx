@@ -249,7 +249,7 @@ export function SkillHubPanel(props: SkillHubPanelProps): React.JSX.Element {
     <div className={css.panel + (isSidebar ? ' ' + css.panelWide : '')} aria-busy={batchBusy || tagBusy}>
       <div className={css.header}>
         <h2 className={css.title}><IconSkillOutline16 size={16} className={css.titleIcon} /> {tt('panel.title')}{catalog !== null ? <span className={css.pluginVersion}>v{catalog.pluginVersion}</span> : null}</h2>
-        {headerCount !== null
+        {headerCount !== null && page === null
           ? <span className={css.headerCount}>
               {tt('panel.count', { count: headerCount })}
               {tab === 'general' && catalog !== null && (rolesView || statusFilter !== 'enabled') && visibleDisabledCount > 0 ? ' · ' + tt('panel.disabledCount', { count: visibleDisabledCount }) : null}
@@ -258,7 +258,15 @@ export function SkillHubPanel(props: SkillHubPanelProps): React.JSX.Element {
         {catalog !== null && !catalog.complete ? <span className={css.hint}>{tt('panel.incomplete')}</span> : null}
         {catalog !== null && (catalog.duplicateNames?.length ?? 0) > 0 ? <button type='button' className={css.opBtn} title={tt('row.duplicateHint')} onClick={() => { clearListFilters() }}>⚠ {tt('row.duplicate')}×{(catalog.duplicateNames ?? []).length}</button> : null}
         <span className={css.actions}>
-          <button type='button' className={css.button + ' ' + css.primary} onClick={() => { setShowForm((value) => !value) }}>{tt('panel.new')}</button>
+          {/* 一级切换：技能 / 仓库（场景从「⋯ → 场景」进入，作为临时第三页） */}
+          <span style={segmentedStyle}>
+            <button type='button' style={page === null ? segmentedActiveStyle : segmentedItemStyle} onClick={() => { setPage(null) }}>{tt('view.skills')}</button>
+            <button type='button' style={page === 'repos' ? segmentedActiveStyle : segmentedItemStyle} onClick={() => { setPage('repos') }}>{tt('view.repos')}</button>
+            {page === 'scenes' ? (
+              <button type='button' style={segmentedActiveStyle} title={tt('scenes.close')} aria-label={tt('scenes.close')} onClick={() => { setPage(null) }}>{tt('view.scenes')} ✕</button>
+            ) : null}
+          </span>
+          {page === null ? <button type='button' className={css.button + ' ' + css.primary} onClick={() => { setShowForm((value) => !value) }}>{tt('panel.new')}</button> : null}
           <span className={css.menuAnchor} ref={moreMenuRef}>
             <button
               type='button'
@@ -336,17 +344,6 @@ export function SkillHubPanel(props: SkillHubPanelProps): React.JSX.Element {
       ) : null}
 
       {detailLoading ? <div className={css.empty}>{tt('detail.loading')}</div> : null}
-
-      {/* 一级切换：技能 / 仓库（场景从「⋯ → 场景」进入，作为临时第三页） */}
-      <div className={css.filterBar}>
-        <span style={segmentedStyle}>
-          <button type='button' style={page === null ? segmentedActiveStyle : segmentedItemStyle} onClick={() => { setPage(null) }}>{tt('view.skills')}</button>
-          <button type='button' style={page === 'repos' ? segmentedActiveStyle : segmentedItemStyle} onClick={() => { setPage('repos') }}>{tt('view.repos')}</button>
-          {page === 'scenes' ? (
-            <button type='button' style={segmentedActiveStyle} title={tt('scenes.close')} aria-label={tt('scenes.close')} onClick={() => { setPage(null) }}>{tt('view.scenes')} ✕</button>
-          ) : null}
-        </span>
-      </div>
 
       {page !== null ? (
         <ManagerView
