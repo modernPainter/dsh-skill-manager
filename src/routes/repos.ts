@@ -6,7 +6,7 @@
  * 绝不另开一条更松的通路。
  *
  * 阶段 1 覆盖：仓库源 CRUD / 连接测试 / 扫描 / 同步快照 / 安装（异步任务，
- * 含本地改动冲突检测）/ 认证凭据 CRUD。上传与场景在后续阶段补齐。
+ * 含本地改动冲突检测）/ 认证凭据 CRUD。上传在后续阶段补齐。
  */
 
 import { randomUUID } from 'node:crypto'
@@ -203,7 +203,6 @@ export function repoV2Routes(deps: RepoRouteDeps): RouteSpec[] {
           ...(authId !== '' ? { authId } : {}),
           ...(readString(body, 'description') !== '' ? { description: readString(body, 'description') } : {}),
           ...(readString(body, 'defaultBranch') !== '' ? { defaultBranch: readString(body, 'defaultBranch') } : {}),
-          ...(readString(body, 'scenesPath') !== '' ? { scenesPath: readString(body, 'scenesPath') } : {}),
           ...(readString(body, 'manifestPath') !== '' ? { manifestPath: readString(body, 'manifestPath') } : {}),
           ...(readStrings(body, 'tags').length > 0 ? { tags: readStrings(body, 'tags') } : {}),
         })

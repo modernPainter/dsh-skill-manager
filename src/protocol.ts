@@ -116,12 +116,3 @@ export type {
   RepoScanResult,
   ConnectionTestResult,
 } from './protocol/git.ts'
-
-// ── 场景（阶段 2 新增） ──
-export type {
-  SceneManifest,
-  SceneSkillEntry,
-  SceneRecord,
-  SceneConflictItem,
-  SceneRestoreRequest,
-} from './protocol/scene.ts'

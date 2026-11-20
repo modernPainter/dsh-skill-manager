@@ -2155,7 +2155,7 @@ describe('skill-hub routes', () => {
   })
 
   it('deletes a stale disabled record instead of failing on the missing file', async () => {
-    const tag = await store.saveTag({ name: 'scene-x' })
+    const tag = await store.saveTag({ name: 'role-x' })
     await store.setTagMembers(tag.id, ['ghost'])
     await store.addDisabled({ name: 'ghost', description: 'x', path: join(home, 'skills', 'ghost', 'SKILL.md.disabled'), root: 'user-dsh', disabledAt: 1 })
     const res = new FakeResponse()
@@ -2560,7 +2560,13 @@ describe('skill-hub API surface', () => {
 
   it('keeps every path inside the family root and registered', () => {
     const routes = makeRoutes(deps)
-    const registered = new Set(routes.filter((route) => route.kind === 'exact').map((route) => route.path))
+    // 只比对 skill-hub 族：仓库源 / 公共技能库路由挂在 /api/skill-manager 下，
+    // 由各自域的常量维护，不属于这条「声明 = 注册」一致性约束。
+    const registered = new Set(
+      routes
+        .filter((route) => route.kind === 'exact' && route.path.startsWith(SKILL_HUB_API_ROOT + '/'))
+        .map((route) => route.path),
+    )
     const declared = Object.values(SKILL_HUB_API)
     for (const path of declared) expect(path.startsWith(SKILL_HUB_API_ROOT + '/')).toBe(true)
     // 常量与注册表互为子集：一个声明了没注册（客户端必然 404），或注册了没声明

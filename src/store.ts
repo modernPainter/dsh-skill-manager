@@ -22,6 +22,3 @@ export { SkillHubStore } from './store/store.ts'
 
 // ── 阶段 1：自有 Git 仓库源持久化（独立 sidecar，不破坏 Hub state） ──
 export { ReposStore, reposStatePath, REPOS_STORE_VERSION } from './store/repos.ts'
-
-// ── 阶段 2：场景持久化（独立 sidecar） ──
-export { ScenesStore, scenesStatePath } from './store/scenes.ts'

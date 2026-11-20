@@ -70,7 +70,7 @@ export const SKILL_HUB_API = {
 } as const
 
 /**
- * 自有 Git 仓库 / 场景管理 API 族。
+ * 自有 Git 仓库管理 API 族。
  *
  * 路径用扁平形式（固定路径 + query/body 参数），因为宿主路由表只支持精确
  * 路径与前缀，没有 `:param` 动态段。与 skill-hub 族分开命名，避免与原有
@@ -97,14 +97,8 @@ export const SKILL_MANAGER_API = {
   auths: '/api/skill-manager/auths',
   /** 删除认证凭据（POST）。 */
   authDelete: '/api/skill-manager/auths/delete',
-  /** 场景列表 / 新建（GET / POST）。 */
-  scenes: '/api/skill-manager/scenes',
-  /** 删除场景（POST）。 */
-  sceneDelete: '/api/skill-manager/scenes/delete',
-  /** 把场景备份到仓库（POST）。 */
-  sceneBackup: '/api/skill-manager/scenes/backup',
-  /** 恢复计划：列出冲突（GET，?id=）。 */
-  sceneRestorePlan: '/api/skill-manager/scenes/restore/plan',
-  /** 执行恢复（POST）。 */
-  sceneRestore: '/api/skill-manager/scenes/restore',
+  /** 云效公共技能库列表（GET）。 */
+  publicSkills: '/api/skill-manager/public/skills',
+  /** 安装云效公共技能库中的技能（POST）。 */
+  publicInstall: '/api/skill-manager/public/install',
 } as const

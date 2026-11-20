@@ -6,7 +6,7 @@
  * detail inspection, and the new-skill scaffold form.
  *
  * Thin shell: state and flows live in useSkillHub, the tab contents live in
- * SourcesView / LocationsView / ScenesView / MarketView, the dialog family lives in
+ * SourcesView / LocationsView / MarketView, the dialog family lives in
  * dialogs.tsx, and their wiring lives in PanelDialogs.tsx. This component
  * owns only the shared chrome (header, banners, filter bar, shared sections)
  * and the view routing. Hooks below own only its local UI state.
@@ -55,8 +55,8 @@ export function SkillHubPanel(props: SkillHubPanelProps): React.JSX.Element {
   const [moreOpen, setMoreOpen] = useState(false)
   /** 「⋯」菜单锚点：点击菜单外部时用它判断是否属于菜单自身。 */
   const moreMenuRef = useRef<HTMLSpanElement | null>(null)
-  /** 二级页面：仓库管理 / 场景备份，null 表示技能库主页。 */
-  const [page, setPage] = useState<'repos' | 'scenes' | null>(null)
+  /** 二级页面：仓库管理，null 表示技能库主页。 */
+  const [page, setPage] = useState<'repos' | null>(null)
   const {
     catalog, loading, loadError, successBanner, detail, detailLoading, showForm, formName, formDesc,
     formBody, formRoot, formWorkspace, workspaces, formBusy, formMessage, hubConfig, tab, generalView, sourceFilter, statusFilter, sortKey, search,
@@ -134,6 +134,9 @@ export function SkillHubPanel(props: SkillHubPanelProps): React.JSX.Element {
     }
   }, [moreOpen])
 
+  // 切页时收起菜单：导入入口只在仓库页出现，避免状态跨页残留。
+  useEffect(() => { setMoreOpen(false) }, [page])
+
   // -------------------------------------------------------------- detail
 
   useEffect(() => {
@@ -205,8 +208,8 @@ export function SkillHubPanel(props: SkillHubPanelProps): React.JSX.Element {
 
   /**
    * The roles view ignores the persisted status/source filters (a role is a
-   * curated roster — see ScenesView), so those filters must not count as
-   * active there, and the header must not report a shrunken total.
+   * curated roster), so those filters must not count as active there, and the
+   * header must not report a shrunken total.
    */
   const rolesView = tab === 'general' && generalView === 'scene'
   const statusFilterActive = !rolesView && statusFilter !== 'all'
@@ -241,9 +244,30 @@ export function SkillHubPanel(props: SkillHubPanelProps): React.JSX.Element {
     ? projectCount
     : tab === 'trash'
       ? (sourcesState?.trash.length ?? 0)
-      : tab === 'market' || tab === 'scenes'
+      : tab === 'market'
         ? null
         : generalActiveShown
+
+  // 导入入口（其他 Agent / ZIP）属于仓库页内容，渲染在仓库区标题行右侧。
+  const importMenu = (
+    <span className={css.menuAnchor} ref={moreMenuRef}>
+      <button
+        type='button'
+        className={css.opBtn + ' ' + css.moreButton}
+        aria-label={tt('panel.more')}
+        aria-haspopup='menu'
+        aria-expanded={moreOpen}
+        title={tt('panel.more')}
+        onClick={() => { setMoreOpen((value) => !value) }}
+      >⋯</button>
+      {moreOpen ? (
+        <div className={css.menu} role='menu'>
+          <button type='button' role='menuitem' className={css.menuItem} onClick={() => { setMoreOpen(false); setShowForeign(true) }}>{tt('foreign.open')}</button>
+          <button type='button' role='menuitem' className={css.menuItem} disabled={zipBusy} title={tt('zip.hint')} onClick={() => { setMoreOpen(false); zipInputRef.current?.click() }}>{zipBusy ? tt('zip.importing') : tt('zip.open')}</button>
+        </div>
+      ) : null}
+    </span>
+  )
 
   return (
     <div className={css.panel + (isSidebar ? ' ' + css.panelWide : '')} aria-busy={batchBusy || tagBusy}>
@@ -258,32 +282,10 @@ export function SkillHubPanel(props: SkillHubPanelProps): React.JSX.Element {
         {catalog !== null && !catalog.complete ? <span className={css.hint}>{tt('panel.incomplete')}</span> : null}
         {catalog !== null && (catalog.duplicateNames?.length ?? 0) > 0 ? <button type='button' className={css.opBtn} title={tt('row.duplicateHint')} onClick={() => { clearListFilters() }}>⚠ {tt('row.duplicate')}×{(catalog.duplicateNames ?? []).length}</button> : null}
         <span className={css.actions}>
-          {/* 一级切换：技能 / 仓库（场景从「⋯ → 场景」进入，作为临时第三页） */}
+          {/* 一级切换：技能 / 仓库 */}
           <span style={segmentedStyle}>
             <button type='button' style={page === null ? segmentedActiveStyle : segmentedItemStyle} onClick={() => { setPage(null) }}>{tt('view.skills')}</button>
             <button type='button' style={page === 'repos' ? segmentedActiveStyle : segmentedItemStyle} onClick={() => { setPage('repos') }}>{tt('view.repos')}</button>
-            {page === 'scenes' ? (
-              <button type='button' style={segmentedActiveStyle} title={tt('scenes.close')} aria-label={tt('scenes.close')} onClick={() => { setPage(null) }}>{tt('view.scenes')} ✕</button>
-            ) : null}
-          </span>
-          {page === null ? <button type='button' className={css.button + ' ' + css.primary} onClick={() => { setShowForm((value) => !value) }}>{tt('panel.new')}</button> : null}
-          <span className={css.menuAnchor} ref={moreMenuRef}>
-            <button
-              type='button'
-              className={css.opBtn + ' ' + css.moreButton}
-              aria-label={tt('panel.more')}
-              aria-haspopup='menu'
-              aria-expanded={moreOpen}
-              title={tt('panel.more')}
-              onClick={() => { setMoreOpen((value) => !value) }}
-            >⋯</button>
-            {moreOpen ? (
-              <div className={css.menu} role='menu'>
-                <button type='button' role='menuitem' className={css.menuItem} onClick={() => { setMoreOpen(false); setShowForeign(true) }}>{tt('foreign.open')}</button>
-                <button type='button' role='menuitem' className={css.menuItem} disabled={zipBusy} title={tt('zip.hint')} onClick={() => { setMoreOpen(false); zipInputRef.current?.click() }}>{zipBusy ? tt('zip.importing') : tt('zip.open')}</button>
-                <button type='button' role='menuitem' className={css.menuItem} disabled={page !== null} onClick={() => { setMoreOpen(false); setPage('scenes') }}>{tt('view.scenes')}</button>
-              </div>
-            ) : null}
           </span>
         </span>
       </div>
@@ -347,9 +349,9 @@ export function SkillHubPanel(props: SkillHubPanelProps): React.JSX.Element {
 
       {page !== null ? (
         <ManagerView
-          section={page}
           skills={(catalog?.skills ?? []).map((skill) => skill.name)}
           onChanged={() => { void hub.reloadCatalog() }}
+          actions={importMenu}
         />
       ) : catalog !== null ? (
         <>
@@ -362,6 +364,7 @@ export function SkillHubPanel(props: SkillHubPanelProps): React.JSX.Element {
               aria-controls='skill-hub-filter-panel'
               onClick={() => { setFiltersOpen((value) => !value) }}
             >{tt('filter.title')}{activeFilterCount > 0 ? ' (' + activeFilterCount + ')' : ''}</button>
+            <button type='button' className={css.button + ' ' + css.primary} onClick={() => { setShowForm((value) => !value) }}>{tt('panel.new')}</button>
           </div>
           {filtersOpen ? (
             <div className={css.filterPanel} id='skill-hub-filter-panel'>

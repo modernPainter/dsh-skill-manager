@@ -96,7 +96,7 @@ export function codeupRepoUrl(source: GitRepoSource): string {
 }
 
 /** 规范化仓库源 —— 填充 backend / apiBase / defaultBranch 等字段。 */
-export function normalizeRepoSource(raw: { url: string; backend?: GitBackend; defaultBranch?: string; scenesPath?: string; manifestPath?: string }): Omit<GitRepoSource, 'slug' | 'authId' | 'lastCommitSha' | 'lastCheckedAt' | 'manifest'> & { slug: string } {
+export function normalizeRepoSource(raw: { url: string; backend?: GitBackend; defaultBranch?: string; manifestPath?: string }): Omit<GitRepoSource, 'slug' | 'authId' | 'lastCommitSha' | 'lastCheckedAt' | 'manifest'> & { slug: string } {
   const url = raw.url.trim()
   const slug = extractSlug(url)
   if (slug === null) throw new RepoFetchError('无法解析仓库 URL：' + url, 400)
@@ -108,7 +108,6 @@ export function normalizeRepoSource(raw: { url: string; backend?: GitBackend; de
     apiBase,
     backend,
     defaultBranch: raw.defaultBranch ?? 'main',
-    scenesPath: raw.scenesPath ?? 'scenes',
     manifestPath: raw.manifestPath ?? 'skill-manifest.json',
   }
 }

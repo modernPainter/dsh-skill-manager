@@ -28,7 +28,7 @@ import { sourceRoutes } from './routes/sources.ts'
 import { foreignRoutes } from './routes/foreign.ts'
 import { zipImportRoutes } from './routes/zip-import.ts'
 import { repoV2Routes } from './routes/repos.ts'
-import { sceneRoutes } from './routes/scenes.ts'
+import { publicSkillRoutes } from './routes/public-skills.ts'
 
 export type { SkillHubRouteDeps, SkillLookupLike } from './routes/helpers.ts'
 export type { RouteFence } from './routes/http.ts'
@@ -93,12 +93,10 @@ export function makeRoutes(deps: SkillHubRouteDeps): WebRoute[] {
     ...sourceRoutes(deps),
     ...foreignRoutes(deps),
     ...zipImportRoutes(deps),
+    // 云效公共技能库：走内部 Java 服务，与仓库源无关，始终注册。
+    ...publicSkillRoutes(deps),
     // 自有 Git 仓库源路由：只有注入了 repos store 的调用点才注册。
     ...(deps.repos !== undefined ? repoV2Routes({ ...deps, repos: deps.repos }) : []),
-    // 场景路由：需要 repos + scenes 同时就绪。
-    ...(deps.repos !== undefined && deps.scenes !== undefined
-      ? sceneRoutes({ ...deps, repos: deps.repos, scenes: deps.scenes })
-      : []),
   ]
   return [
     ...specs.map((spec) => createRoute(deps, spec)),

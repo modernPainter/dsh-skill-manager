@@ -34,7 +34,6 @@ import { homedir } from 'node:os'
 
 // ── 阶段 1 新增：自有 Git 仓库源 ──
 import { ReposStore } from './store/repos.ts'
-import { ScenesStore } from './store/scenes.ts'
 import { setAuthStore } from './repo/git-client.ts'
 
 /** Stable cordis plugin name (matches cordis.patch.yml insert id). */
@@ -257,7 +256,6 @@ export function apply(ctx: Context, config?: Config): void {
   const store = new SkillHubStore()
   // ── 阶段 1 新增：自有 Git 仓库源持久化实例（独立 sidecar） ──
   const reposStore = new ReposStore()
-  const scenesStore = new ScenesStore()
   setAuthStore(reposStore.asAuthStore())
 
   let disposeRoutes: (() => void) | undefined
@@ -421,7 +419,6 @@ export function apply(ctx: Context, config?: Config): void {
           skills: ctx.skills,
           store,
           repos: reposStore,
-          scenes: scenesStore,
           // The host's own `/api` trust fence (loopback ∪ bind address ∪
           // --trusted-host ∪ browser session). Read per request: Connection
           // may be provided after this plugin starts, and a one-shot read here

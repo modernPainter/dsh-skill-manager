@@ -1,33 +1,31 @@
 /**
- * 「我的仓库」与「场景备份」管理视图。
+ * 「我的仓库」管理视图。
  *
  * 自包含实现（inline styles）：不改动既有 panel.module.css，也不依赖
- * SkillHub 既有的角色（role）语义 —— 这里的「场景」是 skill 版本清单 +
- * 配置快照，和设置里的「角色」是两个概念，因此单独成页。
+ * SkillHub 既有的角色（role）语义，因此单独成页。
  *
- * 交互约定：所有危险操作（删除仓库、删除场景、覆盖安装、覆盖恢复）都要
- * 经过二次确认；批量结果逐项反馈（成功/跳过/失败）。
+ * 交互约定：所有危险操作（删除仓库、覆盖安装）都要经过二次确认；
+ * 批量结果逐项反馈（成功/跳过/失败）。
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { GitRepoSource, RepoSkillManifestEntry, SceneManifest } from '../../protocol.ts'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { GitRepoSource, RepoSkillManifestEntry } from '../../protocol.ts'
 import { errorMessage } from '../helpers.ts'
 import { Toast } from './Toast.tsx'
 import { IconChevronDownOutline14, IconScanOutline16 } from '../icons.tsx'
 import {
   managerApi,
   type InstallProgress,
-  type RestorePlanResult,
-  type SceneRemoteRef,
+  type PublicSkillEntry,
 } from '../manager-api.ts'
 
 export interface ManagerViewProps {
-  /** 当前页签：仓库管理或场景备份（一级 tab 已拆分，这里只渲染其一）。 */
-  section: 'repos' | 'scenes'
-  /** 当前已安装 skills 名，用于上传与场景创建的选择器。 */
+  /** 当前已安装 skills 名，用于上传的选择器。 */
   skills: string[]
-  /** 安装/恢复成功后刷新目录。 */
+  /** 安装成功后刷新目录。 */
   onChanged: () => void
+  /** 仓库区标题行右侧的操作（导入入口由上层传入）。 */
+  actions?: React.ReactNode
 }
 
 interface PendingConfirm {
@@ -110,39 +108,46 @@ const path: React.CSSProperties = { fontSize: 11, opacity: 0.55, overflow: 'hidd
 
 export function ManagerView(props: ManagerViewProps): React.JSX.Element {
   const [repos, setRepos] = useState<GitRepoSource[]>([])
-  const [scenes, setScenes] = useState<SceneManifest[]>([])
-  const [sceneRemotes, setSceneRemotes] = useState<Record<string, SceneRemoteRef>>({})
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [pending, setPending] = useState<PendingConfirm | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
 
-  // 离线时场景列表照样能读（本地 sidecar），单独兜底不阻断仓库区。
-  const loadScenes = useCallback(async (): Promise<void> => {
-    try {
-      const payload = await managerApi.listScenes()
-      setScenes(payload.scenes)
-      setSceneRemotes(payload.remotes)
-    } catch {
-      setScenes([])
-      setSceneRemotes({})
-    }
-  }, [])
+  /** 云效公共技能库：进页面即拉取，不需要刷新按钮。 */
+  const [publicSkills, setPublicSkills] = useState<PublicSkillEntry[]>([])
+  const [publicMeta, setPublicMeta] = useState<{ ref: string; fileCount: number } | null>(null)
+  const [publicLoading, setPublicLoading] = useState(true)
+  const [publicError, setPublicError] = useState<string | null>(null)
 
   const refresh = useCallback(async (): Promise<void> => {
     setError(null)
     try {
       const payload = await managerApi.listRepos()
       setRepos(payload.repos)
-      await loadScenes()
     } catch (caught) {
-      // 离线：仓库配置读不到时给出明确提示，但仍尝试展示本地场景。
       setError(errorMessage(caught))
-      await loadScenes()
     }
-  }, [loadScenes])
+  }, [])
 
   useEffect(() => { void refresh() }, [refresh])
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const payload = await managerApi.listPublicSkills()
+        if (cancelled) return
+        setPublicSkills(payload.skills)
+        setPublicMeta({ ref: payload.ref, fileCount: payload.fileCount })
+        setPublicError(null)
+      } catch (caught) {
+        if (!cancelled) setPublicError('云效公共技能库加载失败：' + errorMessage(caught))
+      } finally {
+        if (!cancelled) setPublicLoading(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [])
 
   const run = async (label: string, action: () => Promise<string | void>): Promise<void> => {
     setBusy(label)
@@ -162,34 +167,34 @@ export function ManagerView(props: ManagerViewProps): React.JSX.Element {
 
   return (
     <div>
-      <div style={{ ...row, marginBottom: 12 }}>
-        <span style={muted}>{props.section === 'repos' ? '管理自有 Git skills 仓库：扫描、安装与上传' : '把一组 skills 打成快照，备份到仓库或按需恢复'}</span>
+      <div style={{ ...row, marginBottom: 12, justifyContent: 'space-between' }}>
+        <span style={muted}>管理自有 Git skills 仓库：扫描、安装与上传</span>
+        {props.actions ?? null}
       </div>
 
-      {error !== null ? <div style={banner} role='alert'>{error}</div> : null}
+      {error !== null || publicError !== null ? <div style={banner} role='alert'>{error ?? publicError}</div> : null}
       <Toast message={notice} onDone={() => { setNotice(null) }} />
 
-      {props.section === 'repos'
-        ? <ReposSection
-            repos={repos}
-            skills={props.skills}
-            busy={busy}
-            onRefresh={refresh}
-            onChanged={props.onChanged}
-            run={run}
-            confirm={confirm}
-          />
-        : <ScenesSection
-            scenes={scenes}
-            remotes={sceneRemotes}
-            repos={repos}
-            skills={props.skills}
-            busy={busy}
-            run={run}
-            confirm={confirm}
-            onRefresh={refresh}
-            onInstalled={props.onChanged}
-          />}
+      <PublicSkillsSection
+        skills={publicSkills}
+        meta={publicMeta}
+        loading={publicLoading}
+        installedNames={props.skills}
+        busy={busy}
+        run={run}
+        confirm={confirm}
+        onChanged={props.onChanged}
+      />
+
+      <ReposSection
+        repos={repos}
+        skills={props.skills}
+        busy={busy}
+        onRefresh={refresh}
+        onChanged={props.onChanged}
+        run={run}
+        confirm={confirm}
+      />
 
       {pending !== null ? (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60 }}>
@@ -215,6 +220,81 @@ export function ManagerView(props: ManagerViewProps): React.JSX.Element {
   )
 }
 
+// ───────────────────────────────────────────────────────────── 公共技能库
+
+interface PublicSectionProps {
+  skills: PublicSkillEntry[]
+  meta: { ref: string; fileCount: number } | null
+  loading: boolean
+  /** 本地已安装的 skills 名（与仓库区共用同一份）。 */
+  installedNames: string[]
+  busy: string | null
+  run: SectionProps['run']
+  confirm: SectionProps['confirm']
+  onChanged: () => void
+}
+
+/** 云效公共技能库：列表只读，安装复用仓库的落盘语义（覆盖前二次确认）。 */
+function PublicSkillsSection(props: PublicSectionProps): React.JSX.Element {
+  const install = async (entry: PublicSkillEntry, installed: boolean): Promise<void> => {
+    const action = async (): Promise<string> => {
+      const result = await managerApi.installPublicSkill(entry.name, installed)
+      if (result.status !== 'installed') throw new Error(result.error ?? '安装失败')
+      props.onChanged()
+      return '已安装 ' + result.name
+    }
+    const label = 'public-install:' + entry.name
+    if (!installed) {
+      await props.run(label, action)
+      return
+    }
+    props.confirm({
+      title: '覆盖安装 ' + entry.name,
+      message: `本地已存在同名 skills「${entry.name}」，将从云效公共技能库重新安装并覆盖（原版本进回收站）。`,
+      confirmLabel: '覆盖安装',
+      run: async () => { await props.run(label, action) },
+    })
+  }
+
+  return (
+    <section style={box}>
+      <div style={{ ...row, marginBottom: 4 }}>
+        <strong>云效公共技能库</strong>
+        <span style={muted}>
+          {props.meta !== null ? `${props.meta.ref} · ${props.meta.fileCount} 个文件 · ${props.skills.length} 个技能` : '加载中…'}
+        </span>
+      </div>
+      {props.loading ? <p style={muted}>正在加载云效公共技能库…</p> : null}
+      {!props.loading && props.skills.length === 0 ? <p style={muted}>公共技能库暂无可用技能。</p> : null}
+      {props.skills.length > 0 ? (
+        <div style={cardGrid}>
+          {props.skills.map((entry) => {
+            const installed = props.installedNames.includes(entry.name)
+            return (
+              <div key={entry.name} style={card}>
+                <div style={{ ...row, gap: 6 }}>
+                  <strong style={{ fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entry.name}</strong>
+                  {installed ? <span style={badge}>已安装</span> : null}
+                </div>
+                <div style={desc}>来自云效公共技能库</div>
+                <div style={path} title={entry.path}>{entry.path}</div>
+                <div style={{ ...row, gap: 6, marginTop: 'auto' }}>
+                  <button
+                    type='button'
+                    style={primary}
+                    disabled={props.busy !== null}
+                    onClick={() => { void install(entry, installed) }}
+                  >{installed ? '重新安装' : '安装'}</button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      ) : null}
+    </section>
+  )
+}
+
 // ───────────────────────────────────────────────────────────── 仓库区
 
 interface SectionProps {
@@ -230,9 +310,8 @@ interface SectionProps {
 function ReposSection(props: SectionProps): React.JSX.Element {
   const [url, setUrl] = useState('')
   const [branch, setBranch] = useState('')
-  const [scenesPath, setScenesPath] = useState('')
   const [token, setToken] = useState('')
-  /** 低频字段（分支、目录、令牌）收进「高级选项」，默认只露仓库地址。 */
+  /** 低频字段（分支、令牌）收进「高级选项」，默认只露仓库地址。 */
   const [advancedOpen, setAdvancedOpen] = useState(false)
 
   const [activeSlug, setActiveSlug] = useState<string | null>(null)
@@ -262,7 +341,6 @@ function ReposSection(props: SectionProps): React.JSX.Element {
       url: url.trim(),
       ...(authId !== undefined ? { authId } : {}),
       ...(branch.trim() !== '' ? { defaultBranch: branch.trim() } : {}),
-      ...(scenesPath.trim() !== '' ? { scenesPath: scenesPath.trim() } : {}),
     })
     setUrl('')
     await props.onRefresh()
@@ -349,7 +427,6 @@ function ReposSection(props: SectionProps): React.JSX.Element {
           <>
             <div style={{ ...row, marginBottom: 8 }}>
               <input style={input} placeholder='默认分支（main）' value={branch} onChange={(event) => { setBranch(event.target.value) }} />
-              <input style={input} placeholder='场景目录（scenes）' value={scenesPath} onChange={(event) => { setScenesPath(event.target.value) }} />
             </div>
             <div style={{ ...row, marginBottom: 8 }}>
               <input
@@ -502,208 +579,6 @@ function ReposSection(props: SectionProps): React.JSX.Element {
           ))}
         </div>
       </section>
-    </div>
-  )
-}
-
-// ───────────────────────────────────────────────────────────── 场景区
-
-interface ScenesProps {
-  scenes: SceneManifest[]
-  remotes: Record<string, SceneRemoteRef>
-  repos: GitRepoSource[]
-  skills: string[]
-  busy: string | null
-  run: (label: string, action: () => Promise<string | void>) => Promise<void>
-  confirm: (spec: PendingConfirm) => void
-  onRefresh: () => Promise<void>
-  onInstalled: () => void
-}
-
-function ScenesSection(props: ScenesProps): React.JSX.Element {
-  const [sceneId, setSceneId] = useState('')
-  const [sceneName, setSceneName] = useState('')
-  const [sceneDesc, setSceneDesc] = useState('')
-  const [includeConfig, setIncludeConfig] = useState(false)
-  const [members, setMembers] = useState<Set<string>>(new Set())
-  const [plan, setPlan] = useState<RestorePlanResult | null>(null)
-  const [decisions, setDecisions] = useState<Record<string, 'override' | 'skip' | 'backup-then-override'>>({})
-  const [backupSlug, setBackupSlug] = useState('')
-  const [search, setSearch] = useState('')
-
-  const visibleSkills = useMemo(
-    () => props.skills.filter((name) => search === '' || name.toLowerCase().includes(search.toLowerCase())),
-    [props.skills, search],
-  )
-
-  const create = async (): Promise<string> => {
-    if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(sceneId)) throw new Error('场景 id 只能是小写字母、数字和连字符')
-    if (sceneName.trim() === '') throw new Error('请填写场景名称')
-    if (members.size === 0) throw new Error('请至少选择一个 skills')
-    await managerApi.createScene({
-      id: sceneId,
-      name: sceneName.trim(),
-      ...(sceneDesc.trim() !== '' ? { description: sceneDesc.trim() } : {}),
-      skills: [...members],
-      ...(includeConfig ? { includeConfig: true } : {}),
-    })
-    setSceneId('')
-    setSceneName('')
-    setSceneDesc('')
-    setMembers(new Set())
-    await props.onRefresh()
-    return '场景已创建'
-  }
-
-  const backup = async (scene: SceneManifest): Promise<string> => {
-    if (backupSlug === '') throw new Error('请选择备份目标仓库')
-    const result = await managerApi.backupScene({ id: scene.id, slug: backupSlug })
-    await props.onRefresh()
-    return `场景已备份到 ${result.branch} @ ${result.commitSha.slice(0, 8)}（${result.path}）`
-  }
-
-  const openPlan = async (scene: SceneManifest): Promise<void> => {
-    const result = await managerApi.restorePlan(scene.id)
-    setPlan(result)
-    const initial: Record<string, 'override' | 'skip' | 'backup-then-override'> = {}
-    for (const conflict of result.conflicts) initial[conflict.name] = conflict.type === 'missing' ? 'override' : 'skip'
-    setDecisions(initial)
-  }
-
-  const applyRestore = async (): Promise<string> => {
-    if (plan === null) return '没有待应用的变更'
-    const result = await managerApi.restoreScene(plan.scene.id, decisions)
-    setPlan(null)
-    props.onInstalled()
-    const notes = [
-      `恢复完成：安装 ${result.installed.length}`,
-      result.skipped.length > 0 ? `跳过 ${result.skipped.length}` : '',
-      result.failed.length > 0 ? `失败 ${result.failed.length}` : '',
-    ].filter((part) => part !== '').join('，')
-    return notes
-  }
-
-  return (
-    <div>
-      <section style={box}>
-        <strong style={{ display: 'block', marginBottom: 8 }}>从当前 skills 创建场景</strong>
-        <div style={{ ...row, marginBottom: 8 }}>
-          <input style={input} placeholder='场景 id（kebab-case，如 embedded-rpi）' value={sceneId} onChange={(event) => { setSceneId(event.target.value) }} />
-          <input style={input} placeholder='名称' value={sceneName} onChange={(event) => { setSceneName(event.target.value) }} />
-          <input style={{ ...input, flex: 1, minWidth: 220 }} placeholder='描述（可选）' value={sceneDesc} onChange={(event) => { setSceneDesc(event.target.value) }} />
-          <label style={muted}><input type='checkbox' checked={includeConfig} onChange={(event) => { setIncludeConfig(event.target.checked) }} /> 包含配置快照</label>
-          <button type='button' style={primary} disabled={props.busy !== null} onClick={() => { void props.run('create-scene', create) }}>创建</button>
-        </div>
-        <div style={{ ...row, marginBottom: 6 }}>
-          <input style={input} placeholder='筛选 skills…' value={search} onChange={(event) => { setSearch(event.target.value) }} />
-          <button type='button' style={button} onClick={() => { setMembers(new Set(visibleSkills)) }}>全选</button>
-          <button type='button' style={button} onClick={() => { setMembers(new Set()) }}>清空</button>
-          <span style={muted}>已选 {members.size}</span>
-        </div>
-        <div style={{ ...row, maxHeight: 160, overflow: 'auto' }}>
-          {visibleSkills.map((name) => (
-            <label key={name} style={{ ...muted, fontSize: 12 }}>
-              <input
-                type='checkbox'
-                checked={members.has(name)}
-                onChange={(event) => {
-                  setMembers((previous) => {
-                    const next = new Set(previous)
-                    if (event.target.checked) next.add(name)
-                    else next.delete(name)
-                    return next
-                  })
-                }}
-              /> {name}
-            </label>
-          ))}
-          {visibleSkills.length === 0 ? <span style={muted}>没有匹配的本地 skills。</span> : null}
-        </div>
-      </section>
-
-      <section style={{ ...box, display: 'flex', gap: 8, alignItems: 'center' }}>
-        <span style={{ fontSize: 13 }}>备份目标</span>
-        <select style={input} value={backupSlug} onChange={(event) => { setBackupSlug(event.target.value) }}>
-          <option value=''>选择仓库</option>
-          {props.repos.map((repo) => <option key={repo.slug} value={repo.slug}>{repoDisplayName(repo.slug)}</option>)}
-        </select>
-        <span style={muted}>备份会把 scene.json 与 skills 快照推送到仓库的场景目录。</span>
-      </section>
-
-      {props.scenes.length === 0 ? <div style={box}>还没有场景。</div> : null}
-
-      <ul style={list}>
-        {props.scenes.map((scene) => (
-          <li key={scene.id} style={item}>
-            <div style={row}>
-              <strong>{scene.name}</strong>
-              <span style={muted}>{scene.id} · {scene.skills.length} skills · 更新于 {new Date(scene.updatedAt).toLocaleString()}</span>
-              <span style={{ flex: 1 }} />
-              <button type='button' style={button} disabled={props.busy !== null} onClick={() => {
-                props.confirm({
-                  title: '备份场景',
-                  message: `把「${scene.name}」推送到 ${backupSlug === '' ? '（未选择仓库）' : backupSlug}。`,
-                  confirmLabel: '备份',
-                  run: async () => { await props.run('backup:' + scene.id, async () => backup(scene)) },
-                })
-              }}>备份到仓库</button>
-              <button type='button' style={primary} disabled={props.busy !== null} onClick={() => { void props.run('plan:' + scene.id, async () => { await openPlan(scene); return undefined }) }}>恢复…</button>
-              <button type='button' style={danger} disabled={props.busy !== null} onClick={() => {
-                props.confirm({
-                  title: '删除场景',
-                  message: `删除本地场景「${scene.name}」？已推送到仓库的副本不受影响。`,
-                  confirmLabel: '删除',
-                  run: async () => { await props.run('delete-scene:' + scene.id, async () => { await managerApi.deleteScene(scene.id); await props.onRefresh(); return '场景已删除' }) },
-                })
-              }}>删除</button>
-            </div>
-            <div style={muted}>
-              {(() => {
-                const remote = props.remotes[scene.id]
-                if (remote?.remoteRepo === undefined) return '未备份到仓库（恢复将依赖来源仓库历史）'
-                return `已备份到 ${remote.remoteRepo}${remote.remoteCommitSha !== undefined ? ' @ ' + remote.remoteCommitSha.slice(0, 8) : ''}${remote.remotePath !== undefined ? ' · ' + remote.remotePath : ''}`
-              })()}
-            </div>
-          </li>
-        ))}
-      </ul>
-
-      {plan !== null ? (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60 }}>
-          <div style={{ background: 'var(--dsh-bg, #fff)', borderRadius: 10, padding: 18, width: 560, maxWidth: '94vw', maxHeight: '86vh', overflow: 'auto' }} role='dialog' aria-modal='true'>
-            <h3 style={{ margin: '0 0 4px', fontSize: 15 }}>恢复场景：{plan.scene.name}</h3>
-            <p style={{ ...muted, margin: '0 0 12px' }}>逐项确认要覆盖的内容；默认跳过已存在的 skills，绝不静默覆盖。</p>
-            <ul style={list}>
-              {plan.conflicts.map((conflict) => (
-                <li key={conflict.name} style={{ ...item, padding: 10 }}>
-                  <div style={row}>
-                    <strong style={{ fontSize: 13 }}>{conflict.name}</strong>
-                    <span style={muted}>{conflict.type === 'missing' ? '未安装' : conflict.type === 'local-modified' ? '本地已修改' : '版本更新'}</span>
-                    <span style={{ flex: 1 }} />
-                    <select
-                      style={{ ...input, minWidth: 130 }}
-                      value={decisions[conflict.name] ?? 'skip'}
-                      onChange={(event) => {
-                        const value = event.target.value as 'override' | 'skip' | 'backup-then-override'
-                        setDecisions((previous) => ({ ...previous, [conflict.name]: value }))
-                      }}
-                    >
-                      <option value='skip'>跳过</option>
-                      <option value='override'>覆盖</option>
-                      <option value='backup-then-override'>覆盖（原版进回收站）</option>
-                    </select>
-                  </div>
-                  <div style={muted}>{conflict.description}</div>
-                </li>
-              ))}
-            </ul>
-            <div style={{ ...row, justifyContent: 'flex-end', marginTop: 12 }}>
-              <button type='button' style={button} onClick={() => { setPlan(null) }}>取消</button>
-              <button type='button' style={danger} onClick={() => { void props.run('restore', applyRestore) }}>应用变更</button>
-            </div>
-          </div>
-        </div>
-      ) : null}
     </div>
   )
 }

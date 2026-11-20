@@ -21,9 +21,9 @@ export interface MigratedStore {
 
 /**
  * Normalize an arbitrary parsed sidecar document to the current schema.
- * v1 to v2: scenes are dropped (the one-click role merged into group
- * switches), and origins are migrated into source records (repo = origin
- * value, commit snapshot empty — the first update check backfills it).
+ * v1 to v2: the one-click role merged into group switches, and origins are
+ * migrated into source records (repo = origin value, commit snapshot empty —
+ * the first update check backfills it).
  * v2 to v3: market sources become records ({ repo, ref?, commitSha? })
  * instead of bare repo slugs, so a source can pin a release/branch version.
  * Returns null when the file claims a newer schema than this plugin

@@ -11,7 +11,6 @@ function makeSource(backend: 'github' | 'gitlab', apiBase: string): GitRepoSourc
     apiBase,
     backend,
     defaultBranch: 'main',
-    scenesPath: 'scenes',
     manifestPath: 'skill-manifest.json',
   }
 }

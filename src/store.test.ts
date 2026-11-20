@@ -339,22 +339,19 @@ describe('SkillHubStore', () => {
   })
 
   // ---------------------------------------------------- schema 迁移
-  it('migrates a legacy v1 file: origins become sources, scenes are dropped', async () => {
+  it('migrates a legacy v1 file: origins become sources', async () => {
     await writeFile(file, JSON.stringify({
       version: 1,
       disabled: [{ name: 'a', path: '/tmp/a.md.disabled', root: 'user-dsh', disabledAt: 1 }],
       origins: { docx: 'anthropics/skills', pdf: 'anthropics/skills' },
-      scenes: [{ id: 's1', name: '角色', skillNames: ['docx'] }],
     }), 'utf8')
     expect(await store.listDisabled()).toHaveLength(1)
     const sources = await store.listSources()
     expect(sources).toHaveLength(1)
     expect(sources[0]).toMatchObject({ repo: 'anthropics/skills', commitSha: '', skills: ['docx', 'pdf'] })
     expect(await store.listOrigins()).toEqual({ docx: 'anthropics/skills', pdf: 'anthropics/skills' })
-    // scenes 被丢弃：迁移后首次写入持久化时不再保留
     await store.addMarketSource('new/repo')
-    const raw = JSON.parse(await readFile(file, 'utf8')) as { scenes?: unknown[]; marketSources?: unknown[] }
-    expect(raw.scenes).toBeUndefined()
+    const raw = JSON.parse(await readFile(file, 'utf8')) as { marketSources?: unknown[] }
     expect(raw.marketSources).toEqual([{ repo: 'new/repo' }])
   })
 

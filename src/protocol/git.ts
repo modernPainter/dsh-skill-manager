@@ -45,8 +45,6 @@ export interface GitRepoSource {
   description?: string
   /** 默认分支（clone/pull 时使用）。缺省 "main"。 */
   defaultBranch: string
-  /** 场景目录在仓库内的相对路径。缺省 "scenes"。 */
-  scenesPath: string
   /** skill-manifest.json 相对仓库根目录的路径。缺省 "skill-manifest.json"。 */
   manifestPath: string
   /** 仓库级标签（用于 GUI 分组筛选）。 */

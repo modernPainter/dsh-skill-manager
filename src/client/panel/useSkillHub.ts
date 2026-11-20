@@ -20,8 +20,8 @@ import { markAutoChecked, POLL_MS, shouldAutoCheck, SLOW_POLL_MS, type FlowNotic
 /** The hook's result: the panel's complete state + action surface. */
 export type SkillHubState = ReturnType<typeof useSkillHub>
 
-/** 一级视图：技能 / 仓库 / 场景（简化后只保留管理主链路）。 */
-export type SkillTab = 'general' | 'workspace' | 'market' | 'repos' | 'scenes' | 'trash'
+/** 一级视图：技能 / 仓库（简化后只保留管理主链路）。 */
+export type SkillTab = 'general' | 'workspace' | 'market' | 'repos' | 'trash'
 
 /** 通用页二级查看方式：全部 / 按来源 / 按角色。 */
 export type GeneralView = 'all' | 'source' | 'location' | 'scene'

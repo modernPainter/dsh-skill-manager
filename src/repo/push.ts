@@ -1,5 +1,5 @@
 /**
- * 推送到自有 Git 仓库 —— 阶段 2 上传与场景备份共用。
+ * 推送到自有 Git 仓库 —— 上传与增量合并共用。
  *
  * 覆盖三种后端：
  *   - GitHub / Gitea：Git Data API（建 blob → 建 tree → 建 commit → 移分支）
@@ -201,7 +201,7 @@ export async function pushFiles(
   }
 }
 
-/** 从仓库读取一个文件（用于恢复场景 manifest / 增量合并上传前的 manifest）。 */
+/** 从仓库读取一个文件（用于增量合并上传前的 manifest 等）。 */
 export async function readRepoFile(source: GitRepoSource, ref: string, path: string): Promise<Buffer> {
   // GitLab 的 files 路由返回 base64 JSON，不是原始字节；必须先解码，
   // 否则会把 `{"file_name":...}` 当成文件内容解析。云效 Codeup 同样是 base64 JSON。

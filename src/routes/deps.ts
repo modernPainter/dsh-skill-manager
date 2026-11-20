@@ -54,12 +54,10 @@ export interface SkillHubRouteDeps {
   /** Persist a config patch and re-sync plugin surfaces; resolves with the fresh config. */
   updateConfig?: (patch: Partial<HubConfig>) => Promise<HubConfig>
   /**
-   * 自有 Git 仓库源存储。缺省时仓库/场景路由不注册（旧调用点与单元测试
+   * 自有 Git 仓库源存储。缺省时仓库路由不注册（旧调用点与单元测试
    * 无需感知这一层）。
    */
   repos?: import('../store/repos.ts').ReposStore
-  /** 场景存储（阶段 2 接入）。 */
-  scenes?: import('../store/scenes.ts').ScenesStore
 }
 
 /** The resolved hub config a route sees (the shared resolver fills defaults). */

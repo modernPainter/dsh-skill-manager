@@ -1,5 +1,5 @@
 /**
- * 自有 Git 仓库 / 场景的浏览器端 API 客户端。
+ * 自有 Git 仓库的浏览器端 API 客户端。
  *
  * 与 api.ts 相同的出行约定：同源 fetch、写操作带 CSRF 标记头、
  * 路径经 resolveApiUrl 处理反向代理前缀、出网接口用更长超时。
@@ -12,8 +12,6 @@ import {
   type GitAuthRef,
   type GitRepoSource,
   type RepoScanResult,
-  type SceneConflictItem,
-  type SceneManifest,
 } from '../protocol.ts'
 import { SkillHubApiError, resolveApiUrl } from './api.ts'
 
@@ -91,45 +89,31 @@ export interface UploadResult {
   fileCount: number
 }
 
-export interface BackupResult {
-  ok: true
-  scene: SceneManifest
-  commitSha: string
-  branch: string
+/** 云效公共技能库的一条技能（列表接口只给名字与仓库内路径）。 */
+export interface PublicSkillEntry {
+  name: string
   path: string
+}
+
+export interface PublicSkillsPayload {
+  ok: true
+  ref: string
   fileCount: number
+  skills: PublicSkillEntry[]
 }
 
-export interface RestorePlanResult {
-  ok: true
-  scene: SceneManifest
-  conflicts: SceneConflictItem[]
-}
-
-export interface RestoreResult {
-  ok: true
-  installed: string[]
-  skipped: Array<{ name: string; reason: string }>
-  failed: Array<{ name: string; error: string }>
-  replaced: string[]
-}
-
-/** 场景的远端备份引用（scene id → 目标仓库 + 锁定 commit）。 */
-export interface SceneRemoteRef {
-  remoteRepo?: string
-  remotePath?: string
-  remoteCommitSha?: string
-}
-
-export interface ScenesPayload {
-  ok: true
-  scenes: SceneManifest[]
-  remotes: Record<string, SceneRemoteRef>
+export interface PublicInstallResult {
+  ok: boolean
+  name: string
+  status: 'installed' | 'skipped' | 'failed'
+  error?: string
+  replaced?: boolean
+  warnings?: Array<{ rule: string; severity: 'warn'; file: string; line?: number; message: string }>
 }
 
 export const managerApi = {
   listRepos: () => get<ReposPayload>(SKILL_MANAGER_API.repos, {}, LOCAL_TIMEOUT_MS),
-  addRepo: (input: { url: string; authId?: string; description?: string; defaultBranch?: string; scenesPath?: string; manifestPath?: string }) =>
+  addRepo: (input: { url: string; authId?: string; description?: string; defaultBranch?: string; manifestPath?: string }) =>
     post<ReposPayload & { repo: GitRepoSource }>(SKILL_MANAGER_API.repos, input),
   deleteRepo: (slug: string) => post<ReposPayload>(SKILL_MANAGER_API.repoDelete, { slug }),
   testRepo: (slug: string) => get<{ ok: boolean; backend?: string; defaultBranch?: string; error?: string }>(SKILL_MANAGER_API.repoTest, { slug }, NETWORK_TIMEOUT_MS),
@@ -142,12 +126,6 @@ export const managerApi = {
     post<UploadResult>(SKILL_MANAGER_API.repoUpload, input),
   addAuth: (label: string, token: string) => post<{ ok: true; auth: GitAuthRef }>(SKILL_MANAGER_API.auths, { label, token, type: 'https-token' }),
   deleteAuth: (id: string) => post<ReposPayload>(SKILL_MANAGER_API.authDelete, { id }),
-  listScenes: () => request<ScenesPayload>(SKILL_MANAGER_API.scenes, {}, LOCAL_TIMEOUT_MS),
-  createScene: (input: { id: string; name: string; description?: string; skills?: string[]; includeConfig?: boolean; tags?: string[] }) =>
-    post<{ ok: true; scene: SceneManifest }>(SKILL_MANAGER_API.scenes, input),
-  deleteScene: (id: string) => post<{ ok: true; scenes: SceneManifest[] }>(SKILL_MANAGER_API.sceneDelete, { id }),
-  backupScene: (input: { id: string; slug: string; branch?: string; path?: string }) => post<BackupResult>(SKILL_MANAGER_API.sceneBackup, input),
-  restorePlan: (id: string) => get<RestorePlanResult>(SKILL_MANAGER_API.sceneRestorePlan, { id }, NETWORK_TIMEOUT_MS),
-  restoreScene: (id: string, decisions: Record<string, 'override' | 'skip' | 'backup-then-override'>) =>
-    post<RestoreResult>(SKILL_MANAGER_API.sceneRestore, { id, decisions }),
+  listPublicSkills: () => get<PublicSkillsPayload>(SKILL_MANAGER_API.publicSkills, {}, LOCAL_TIMEOUT_MS),
+  installPublicSkill: (name: string, overwrite: boolean) => post<PublicInstallResult>(SKILL_MANAGER_API.publicInstall, { name, overwrite }, NETWORK_TIMEOUT_MS),
 }

@@ -163,7 +163,6 @@ export class ReposStore {
     authId?: string
     description?: string
     defaultBranch?: string
-    scenesPath?: string
     manifestPath?: string
     tags?: readonly string[]
   }): Promise<GitRepoSource> {
@@ -181,7 +180,6 @@ export class ReposStore {
       authId: raw.authId,
       description: raw.description,
       defaultBranch: raw.defaultBranch ?? 'main',
-      scenesPath: raw.scenesPath ?? 'scenes',
       manifestPath: raw.manifestPath ?? 'skill-manifest.json',
       tags: raw.tags,
     }
