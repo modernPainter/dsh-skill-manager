@@ -196,6 +196,7 @@ export async function pushFiles(
     case 'gitlab':
       return pushGitLab(source, branch, files, message)
     case 'generic':
+    case 'codeup':
       throw new RepoFetchError('this repository backend does not support push yet (supported: GitHub / Gitea / GitLab)', 501)
   }
 }
@@ -203,8 +204,8 @@ export async function pushFiles(
 /** 从仓库读取一个文件（用于恢复场景 manifest / 增量合并上传前的 manifest）。 */
 export async function readRepoFile(source: GitRepoSource, ref: string, path: string): Promise<Buffer> {
   // GitLab 的 files 路由返回 base64 JSON，不是原始字节；必须先解码，
-  // 否则会把 `{"file_name":...}` 当成文件内容解析。
-  if (source.backend === 'gitlab') {
+  // 否则会把 `{"file_name":...}` 当成文件内容解析。云效 Codeup 同样是 base64 JSON。
+  if (source.backend === 'gitlab' || source.backend === 'codeup') {
     const { json } = await fetchJson(apiUrl(source, 'contents', { ref, path }), source, `read ${path}`)
     const obj = (typeof json === 'object' && json !== null ? json : {}) as Record<string, unknown>
     const content = typeof obj.content === 'string' ? obj.content : ''

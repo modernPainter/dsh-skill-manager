@@ -8,7 +8,7 @@
  */
 
 /** Git 后端类型（通过 URL 域名自动识别，也可手动覆盖）。 */
-export type GitBackend = 'github' | 'gitlab' | 'gitea' | 'generic'
+export type GitBackend = 'github' | 'gitlab' | 'gitea' | 'codeup' | 'generic'
 
 /** 认证方式。HTTPS + Token 是当前实现，SSH Key 预留在接口里。 */
 export type GitAuthType = 'none' | 'https-token' | 'ssh-key'

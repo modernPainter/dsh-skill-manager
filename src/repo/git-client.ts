@@ -36,6 +36,7 @@ export function detectBackend(url: string): GitBackend {
   const host = extractHost(url).toLowerCase()
   if (host === 'github.com' || host.endsWith('.github.com')) return 'github'
   if (host === 'gitlab.com' || host.endsWith('.gitlab.com')) return 'gitlab'
+  if (host === 'codeup.aliyun.com' || host.endsWith('.codeup.aliyun.com')) return 'codeup'
   if (host.includes('gitea')) return 'gitea'
   return 'generic'
 }
@@ -51,11 +52,23 @@ export function extractHost(url: string): string {
   }
 }
 
-/** 从仓库 URL 提取 slug（owner/repo 形式）。 */
+/** 从仓库 URL 提取 slug（GitHub/GitLab/Gitea 为 owner/repo，云效为 组织/项目组/仓库）。 */
 export function extractSlug(url: string): string | null {
-  const match = /^https?:\/\/[^/]+\/([^/#?]+\/[^/#?]+)/i.exec(url.trim())
-  if (match === null) return null
-  return match[1].replace(/\.git$/, '').replace(/\/+$/, '')
+  let value = url.trim()
+  if (!/^https?:\/\//i.test(value)) value = 'https://' + value
+  let parsed: URL
+  try {
+    parsed = new URL(value)
+  } catch {
+    return null
+  }
+  const segments = parsed.pathname.split('/').filter((segment) => segment !== '')
+  if (segments.length === 0) return null
+  const host = parsed.hostname.toLowerCase()
+  // 云效 Codeup 的仓库标识是「组织/项目组/仓库」三段，少切一段会把仓库名丢掉。
+  const take = host === 'codeup.aliyun.com' || host.endsWith('.codeup.aliyun.com') ? 3 : 2
+  const slug = segments.slice(0, take).join('/').replace(/\.git$/, '')
+  return slug === '' ? null : slug
 }
 
 /** 根据后端类型和 host 组装 API base URL。 */
@@ -68,9 +81,18 @@ export function buildApiBase(url: string, backend: GitBackend): string {
       return `https://${host}/api/v4`
     case 'gitea':
       return `https://${host}/api/v1`
+    case 'codeup':
+      // 云效 OpenAPI：仓库按「组织 ID + 仓库全路径」定位。
+      return 'https://openapi-rdc.aliyuncs.com/oapi/v1/codeup'
     case 'generic':
       return `https://${host}`
   }
+}
+
+/** 云效 Codeup 的仓库级 API 前缀（slug 直接 URL 编码后当仓库标识用）。 */
+export function codeupRepoUrl(source: GitRepoSource): string {
+  const org = source.slug.split('/')[0] ?? ''
+  return `${source.apiBase}/organizations/${encodeURIComponent(org)}/repositories/${encodeURIComponent(source.slug)}`
 }
 
 /** 规范化仓库源 —— 填充 backend / apiBase / defaultBranch 等字段。 */
@@ -113,6 +135,8 @@ export function authHeaders(source: GitRepoSource): Record<string, string> {
   if (source.backend === 'github') return { authorization: `Bearer ${token}` }
   if (source.backend === 'gitlab') return { authorization: `Bearer ${token}` }
   if (source.backend === 'gitea') return { authorization: `token ${token}` }
+  // 云效 Codeup 走专属的访问令牌头，不认 Authorization。
+  if (source.backend === 'codeup') return { 'x-yunxiao-token': token }
   // generic Git HTTP：优先 Bearer，某些老后端用 Basic
   return { authorization: `Bearer ${token}` }
 }
@@ -350,6 +374,24 @@ export function apiUrl(
           return `${apiBase}/repos/${slug}/contents/${encodedPath}?ref=${encodeURIComponent(ref)}`
         case 'file-raw':
           return `${apiBase}/${slug}/raw/${encodeURIComponent(ref)}/${encodedPath}`
+      }
+      break
+    }
+    case 'codeup': {
+      const repoUrl = codeupRepoUrl(source)
+      switch (kind) {
+        // 云效没有「单分支」路由，分支名可直接当 ref 查提交。
+        case 'branch-default':
+        case 'branch-head':
+        case 'commit':
+          return `${repoUrl}/commits/${encodeURIComponent(ref)}`
+        // 只列一层，递归由 discovery-v2 逐层下钻（recursive 参数不生效）。
+        case 'tree':
+          return `${repoUrl}/files/tree?refName=${encodeURIComponent(ref)}&path=${encodedPath}`
+        // 文件内容接口要求把整条路径编码成一段，斜杠保留会 404。
+        case 'contents':
+        case 'file-raw':
+          return `${repoUrl}/files/${encodeURIComponent(params.path ?? '')}?ref=${encodeURIComponent(ref)}`
       }
       break
     }

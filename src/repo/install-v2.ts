@@ -35,11 +35,12 @@ export async function downloadRepoFile(
   const context = `download ${path} from ${source.slug}@${ref}`
 
   // GitLab 的 raw 路由返回的是文件元数据 JSON，必须先走 files API 再 base64 解码。
-  if (source.backend === 'gitlab') {
+  // 云效 Codeup 同理：内容接口直接返回 { content: base64 }。
+  if (source.backend === 'gitlab' || source.backend === 'codeup') {
     const { json } = await fetchJson(apiUrl(source, 'contents', { ref, path }), source, context, fetchImpl, undefined, signal)
     const obj = (typeof json === 'object' && json !== null ? json : {}) as Record<string, unknown>
     const content = typeof obj.content === 'string' ? obj.content : ''
-    if (content === '') throw new RepoFetchError(context + ': no content field in GitLab API response', 422)
+    if (content === '') throw new RepoFetchError(context + ': no content field in ' + source.backend + ' API response', 422)
     return Buffer.from(content, 'base64')
   }
 

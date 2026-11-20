@@ -28,6 +28,18 @@ export interface ReposStoreFile {
 export const REPOS_STORE_VERSION = 1
 
 /**
+ * 修正历史记录：早期版本把云效仓库识别成 generic，且只截了「组织/项目组」两段，
+ * 丢掉仓库名后 API 必然拼错。按 URL 重新识别后端，顺带纠正 slug 与 API base。
+ */
+function healRepoRecord(repo: GitRepoSource): GitRepoSource {
+  const backend = detectBackend(repo.url)
+  const apiBase = buildApiBase(repo.url, backend)
+  const slug = extractSlug(repo.url)
+  if (backend === repo.backend && apiBase === repo.apiBase && (slug === null || slug === repo.slug)) return repo
+  return { ...repo, backend, apiBase, ...(slug !== null ? { slug } : {}) }
+}
+
+/**
  * 简化的 atomic 写入 —— Hub StoreCore 用的就是这个模式。
  */
 async function atomicWrite(file: string, data: ReposStoreFile): Promise<void> {
@@ -55,7 +67,7 @@ export class ReposStore {
         this.state = {
           version: parsed.version ?? REPOS_STORE_VERSION,
           auths: Array.isArray(parsed.auths) ? parsed.auths : [],
-          repos: Array.isArray(parsed.repos) ? parsed.repos : [],
+          repos: Array.isArray(parsed.repos) ? parsed.repos.map((repo) => healRepoRecord(repo)) : [],
         }
       }
     } catch {

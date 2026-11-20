@@ -37,6 +37,26 @@ interface PendingConfirm {
   run: () => Promise<void>
 }
 
+/** 后端类型 → 界面文案（原始值如 codeup 对用户没有意义）。 */
+const BACKEND_LABELS: Record<string, string> = {
+  github: 'GitHub',
+  gitlab: 'GitLab',
+  gitea: 'Gitea',
+  codeup: '云效 Codeup',
+  generic: '通用 Git',
+}
+
+function backendLabel(backend: string | undefined): string {
+  if (backend === undefined) return '未知'
+  return BACKEND_LABELS[backend] ?? backend
+}
+
+/** 展示用仓库名：云效 slug 带一串组织 ID，界面上只保留「项目组/仓库」。 */
+function repoDisplayName(slug: string): string {
+  const parts = slug.split('/')
+  return parts.length >= 3 ? parts.slice(-2).join('/') : slug
+}
+
 const box: React.CSSProperties = { border: '1px solid var(--dsh-border, #d9d9d9)', borderRadius: 8, padding: 12, marginBottom: 12 }
 const row: React.CSSProperties = { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }
 const input: React.CSSProperties = { padding: '6px 8px', border: '1px solid var(--dsh-border, #d9d9d9)', borderRadius: 6, fontSize: 13, minWidth: 180 }
@@ -332,7 +352,7 @@ function ReposSection(props: SectionProps): React.JSX.Element {
           <input style={input} type='password' placeholder='HTTPS Token（写入后不再回显）' value={token} onChange={(event) => { setToken(event.target.value) }} />
           <button type='button' style={primary} disabled={props.busy !== null} onClick={() => { void props.run('add-repo', addRepo) }}>保存仓库</button>
         </div>
-        <p style={muted}>支持 GitHub / GitLab / Gitea / 通用 Git HTTP；仓库根目录需含 skill-manifest.json（缺失时自动扫描目录）。SSH Key 认证为后续扩展点。</p>
+        <p style={muted}>支持 GitHub / GitLab / Gitea / 云效 Codeup / 通用 Git HTTP；仓库根目录需含 skill-manifest.json（缺失时自动扫描目录）。SSH Key 认证为后续扩展点。</p>
       </section>
 
       {props.repos.length === 0 ? <div style={box}>还没有配置仓库。添加后即可扫描、下载、上传 skills。</div> : null}
@@ -341,14 +361,14 @@ function ReposSection(props: SectionProps): React.JSX.Element {
         {props.repos.map((repo) => (
           <li key={repo.slug} style={item}>
             <div style={row}>
-              <strong>{repo.slug}</strong>
-              <span style={muted}>{repo.backend} · {repo.defaultBranch}</span>
+              <strong title={repo.slug}>{repoDisplayName(repo.slug)}</strong>
+              <span style={muted}>{backendLabel(repo.backend)} · {repo.defaultBranch}</span>
               <span style={muted}>{repo.manifest !== undefined ? repo.manifest.skills.length + ' skills' : '未扫描'}</span>
               {repo.lastCheckedAt !== undefined ? <span style={muted}>最近同步 {new Date(repo.lastCheckedAt).toLocaleString()}</span> : null}
               <span style={{ flex: 1 }} />
               <button type='button' style={button} disabled={props.busy !== null} onClick={() => { void props.run('test:' + repo.slug, async () => {
                 const result = await managerApi.testRepo(repo.slug)
-                return result.ok ? `连接正常（${result.backend ?? repo.backend}，默认分支 ${result.defaultBranch ?? repo.defaultBranch}）` : '连接失败：' + (result.error ?? '未知原因')
+                return result.ok ? `连接正常（${backendLabel(result.backend ?? repo.backend)}，默认分支 ${result.defaultBranch ?? repo.defaultBranch}）` : '连接失败：' + (result.error ?? '未知原因')
               }) }}>测试连接</button>
               <button type='button' style={button} disabled={props.busy !== null} onClick={() => { void props.run('scan:' + repo.slug, async () => { await doScan(repo); return undefined }) }}>扫描</button>
               <button type='button' style={button} disabled={props.busy !== null} onClick={() => { void props.run('sync:' + repo.slug, async () => {
@@ -362,7 +382,7 @@ function ReposSection(props: SectionProps): React.JSX.Element {
               <button type='button' style={danger} disabled={props.busy !== null} onClick={() => {
                 props.confirm({
                   title: '删除仓库配置',
-                  message: `将移除 ${repo.slug} 的连接配置（不会删除已安装的 skills，也不会改动远端仓库）。`,
+                  message: `将移除 ${repoDisplayName(repo.slug)} 的连接配置（不会删除已安装的 skills，也不会改动远端仓库）。`,
                   confirmLabel: '删除',
                   run: async () => { await props.run('delete:' + repo.slug, async () => { await managerApi.deleteRepo(repo.slug); await props.onRefresh(); return '仓库已删除' }) },
                 })
@@ -375,7 +395,7 @@ function ReposSection(props: SectionProps): React.JSX.Element {
       {scan !== null ? (
         <section style={box}>
           <div style={row}>
-            <strong>扫描结果 · {scan.source}</strong>
+            <strong>扫描结果 · {repoDisplayName(scan.source)}</strong>
             <span style={muted}>{scan.ref} @ {scan.commitSha.slice(0, 8)} · {scan.skills.length} 个 skills</span>
             <span style={{ flex: 1 }} />
             <label style={muted}><input type='checkbox' checked={overwrite} onChange={(event) => { setOverwrite(event.target.checked) }} /> 覆盖已存在</label>
@@ -387,7 +407,7 @@ function ReposSection(props: SectionProps): React.JSX.Element {
               onClick={() => {
                 props.confirm({
                   title: '安装全部 skills',
-                  message: `从 ${scan.source} 安装 ${scan.skills.length} 个 skills；同名 skills${overwrite ? '将被覆盖（原版本进回收站）' : '会被跳过'}。`,
+                  message: `从 ${repoDisplayName(scan.source)} 安装 ${scan.skills.length} 个 skills；同名 skills${overwrite ? '将被覆盖（原版本进回收站）' : '会被跳过'}。`,
                   confirmLabel: '开始安装',
                   run: async () => { await props.run('install', async () => { await startInstall(scan.skills.map((entry) => entry.name)) }) },
                 })
@@ -416,7 +436,7 @@ function ReposSection(props: SectionProps): React.JSX.Element {
                       onClick={() => {
                         props.confirm({
                           title: '安装 skills ' + entry.name,
-                          message: `从 ${scan.source} 安装 ${entry.name}${installed ? (overwrite ? '，覆盖本地同名 skills（原版本进回收站）' : '，本地已存在，将跳过') : ''}。`,
+                          message: `从 ${repoDisplayName(scan.source)} 安装 ${entry.name}${installed ? (overwrite ? '，覆盖本地同名 skills（原版本进回收站）' : '，本地已存在，将跳过') : ''}。`,
                           confirmLabel: '安装',
                           run: async () => { await props.run('install:' + entry.name, async () => { await startInstall([entry.name]) }) },
                         })
@@ -448,7 +468,7 @@ function ReposSection(props: SectionProps): React.JSX.Element {
         <div style={{ ...row, marginBottom: 8 }}>
           <select style={input} value={uploadSlug} onChange={(event) => { setUploadSlug(event.target.value) }}>
             <option value=''>选择目标仓库</option>
-            {props.repos.map((repo) => <option key={repo.slug} value={repo.slug}>{repo.slug}</option>)}
+            {props.repos.map((repo) => <option key={repo.slug} value={repo.slug}>{repoDisplayName(repo.slug)}</option>)}
           </select>
           <input style={input} placeholder='仓库内目录（skills）' value={uploadDir} onChange={(event) => { setUploadDir(event.target.value) }} />
           <button type='button' style={primary} disabled={props.busy !== null || uploadNames.size === 0} onClick={() => {
@@ -602,7 +622,7 @@ function ScenesSection(props: ScenesProps): React.JSX.Element {
         <span style={{ fontSize: 13 }}>备份目标</span>
         <select style={input} value={backupSlug} onChange={(event) => { setBackupSlug(event.target.value) }}>
           <option value=''>选择仓库</option>
-          {props.repos.map((repo) => <option key={repo.slug} value={repo.slug}>{repo.slug}</option>)}
+          {props.repos.map((repo) => <option key={repo.slug} value={repo.slug}>{repoDisplayName(repo.slug)}</option>)}
         </select>
         <span style={muted}>备份会把 scene.json 与 skills 快照推送到仓库的场景目录。</span>
       </section>

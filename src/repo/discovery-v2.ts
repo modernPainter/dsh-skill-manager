@@ -42,8 +42,53 @@ export function normalizeTreeJson(json: unknown): Array<{ path: string; size: nu
 /** GitLab 单次 tree 请求最多 100 条，超过必须翻页，否则技能清单会被静默截断。 */
 const GITLAB_TREE_MAX_PAGES = 50
 
+/** 云效 tree 接口只列一层，且不受 recursive 参数影响 —— 只能逐层下钻。 */
+const CODEUP_TREE_PAGE_SIZE = 1000
+const CODEUP_TREE_MAX_DIRS = 2000
+
+/** 解析云效 tree 接口的单层条目。 */
+function codeupTreeEntries(json: unknown): Array<{ path: string; type: string; size: number }> {
+  if (!Array.isArray(json)) return []
+  const entries: Array<{ path: string; type: string; size: number }> = []
+  for (const item of json) {
+    if (typeof item !== 'object' || item === null) continue
+    const obj = item as Record<string, unknown>
+    const path = typeof obj.path === 'string' ? obj.path : ''
+    if (path === '') continue
+    entries.push({
+      path,
+      type: typeof obj.type === 'string' ? obj.type : 'blob',
+      size: typeof obj.size === 'number' ? obj.size : 0,
+    })
+  }
+  return entries
+}
+
+/** 云效：先列目录再逐级下钻，结果与 GitHub 的递归 tree 对齐。 */
+async function fetchCodeupTreeBlobs(source: GitRepoSource, ref: string): Promise<Array<{ path: string; size: number }>> {
+  const blobs: Array<{ path: string; size: number }> = []
+  const queue: string[] = ['']
+  let visited = 0
+  while (queue.length > 0 && visited < CODEUP_TREE_MAX_DIRS) {
+    const dir = queue.shift() ?? ''
+    visited += 1
+    for (let page = 1; page <= GITLAB_TREE_MAX_PAGES; page += 1) {
+      const url = apiUrl(source, 'tree', { ref, path: dir }) + `&page=${page}&perPage=${CODEUP_TREE_PAGE_SIZE}`
+      const { json, response } = await fetchJson(url, source, `tree ${source.slug}@${ref} ${dir === '' ? '/' : dir} page ${page}`)
+      for (const entry of codeupTreeEntries(json)) {
+        if (entry.type === 'tree') queue.push(entry.path)
+        else blobs.push({ path: entry.path, size: entry.size })
+      }
+      const next = Number(response.headers.get('x-next-page') ?? '')
+      if (!Number.isFinite(next) || next <= page) break
+    }
+  }
+  return blobs
+}
+
 /** 读取指定 ref 的完整 blob 清单（含后端适配与分页）。 */
 export async function fetchRepoTreeBlobs(source: GitRepoSource, ref: string, treeSha?: string): Promise<Array<{ path: string; size: number }>> {
+  if (source.backend === 'codeup') return fetchCodeupTreeBlobs(source, ref)
   if (source.backend !== 'gitlab') {
     const { json } = await fetchJson(apiUrl(source, 'tree', { ref, ...(treeSha !== undefined ? { treeSha } : {}) }), source, `tree ${source.slug}@${ref}`)
     return normalizeTreeJson(json)
@@ -125,8 +170,8 @@ export function scanFromTree(treeBlobs: readonly { path: string; size?: number }
     if (!item.path.endsWith('/SKILL.md')) continue
 
     // 提取 skill 目录路径：去掉 /SKILL.md 后缀
+    // 允许 `<name>/SKILL.md`（仓库根目录直接放技能目录）与 `<group>/<name>/SKILL.md` 两种布局。
     const dir = item.path.slice(0, -'/SKILL.md'.length)
-    if (dir.includes('/') === false) continue // 必须是至少两层：root/name/SKILL.md
 
     // 提取名字：最后一段
     const slash = dir.lastIndexOf('/')
