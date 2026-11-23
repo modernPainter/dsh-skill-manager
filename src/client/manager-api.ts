@@ -31,9 +31,22 @@ async function request<T>(path: string, init: RequestInit = {}, timeoutMs = LOCA
       throw new SkillHubApiError('HTTP ' + response.status + ': invalid JSON response')
     }
     if (!response.ok || (typeof body === 'object' && body !== null && (body as { ok?: unknown }).ok === false)) {
-      const message = typeof (body as { error?: unknown }).error === 'string'
+      let message = typeof (body as { error?: unknown }).error === 'string'
         ? (body as { error: string }).error
         : 'HTTP ' + response.status
+      // 批量接口（上传）会把逐项拒绝原因放在 rejected 里，拼进提示，
+      // 否则界面上只看到一句「全部被拒绝」，不知道是哪一个、为什么。
+      const rejected = (body as { rejected?: unknown }).rejected
+      if (Array.isArray(rejected)) {
+        const details = rejected.flatMap((entry) => {
+          if (typeof entry !== 'object' || entry === null) return []
+          const record = entry as { name?: unknown; reason?: unknown }
+          return typeof record.name === 'string' && typeof record.reason === 'string'
+            ? [record.name + '（' + record.reason + '）']
+            : []
+        })
+        if (details.length > 0) message += '：' + details.join('、')
+      }
       throw new SkillHubApiError(message)
     }
     return body as T

@@ -28,6 +28,7 @@ import {
   queryParam,
   readString,
   readStrings,
+  workspaceEntries,
   writeError,
   writeJson,
   type RouteSpec,
@@ -171,6 +172,25 @@ export async function installWithOverwrite(deps: SkillHubRouteDeps, targetRoot: 
 }
 
 // ─────────────────────────────────────────────────── 路由
+
+/**
+ * 按名字找本地技能定义。先查全局注册表，再逐个已知工作区找 —— 与目录默认
+ * 视图（buildCatalog 无 cwd）的合并范围保持一致；否则面板里能看到的项目
+ * 技能在上传时会误报「找不到」。
+ */
+async function localSkillDefinition(deps: SkillHubRouteDeps, name: string): Promise<{ path?: string } | undefined> {
+  try {
+    const direct = await deps.skills.get(name)
+    if (direct !== undefined) return direct
+    for (const ws of await workspaceEntries(homeOf(deps))) {
+      const found = await deps.skills.get(name, { cwd: ws.path })
+      if (found !== undefined) return found
+    }
+  } catch {
+    // 查找失败按「找不到」处理，交给调用方给出可读原因。
+  }
+  return undefined
+}
 
 export interface RepoRouteDeps extends SkillHubRouteDeps {
   repos: ReposStore
@@ -430,7 +450,8 @@ export function repoV2Routes(deps: RepoRouteDeps): RouteSpec[] {
 
         const names = readStrings(body, 'names')
         if (names.length === 0) { writeError(res, 400, 'names is required'); return }
-        const branch = readString(body, 'branch').trim() || repo.defaultBranch
+        const branch = (readString(body, 'branch').trim() || repo.defaultBranch || '').trim()
+        if (branch === '') { writeError(res, 400, 'branch is required'); return }
         const baseDir = (readString(body, 'dir').trim() || 'skills').replace(/^\/+|\/+$/g, '')
 
         const files: PushFile[] = []
@@ -438,8 +459,9 @@ export function repoV2Routes(deps: RepoRouteDeps): RouteSpec[] {
         const rejected: Array<{ name: string; reason: string }> = []
 
         for (const name of names) {
-          const definition = await deps.skills.get(name)
-          if (definition?.path === undefined) { rejected.push({ name, reason: 'local skill not found' }); continue }
+          const definition = await localSkillDefinition(deps, name)
+          if (definition === undefined) { rejected.push({ name, reason: '本地没有找到这个技能' }); continue }
+          if (definition.path === undefined) { rejected.push({ name, reason: '运行时技能没有本地文件，无法上传' }); continue }
 
           let local
           try {
@@ -467,7 +489,7 @@ export function repoV2Routes(deps: RepoRouteDeps): RouteSpec[] {
         }
 
         if (rejected.length === names.length) {
-          writeJson(res, 422, { ok: false, error: 'every selected skill was rejected', rejected })
+          writeJson(res, 422, { ok: false, error: '所选 skills 全部被拒绝', rejected })
           return
         }
 

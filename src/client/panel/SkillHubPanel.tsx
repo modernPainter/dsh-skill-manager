@@ -312,6 +312,7 @@ export function SkillHubPanel(props: SkillHubPanelProps): React.JSX.Element {
       {page !== null ? (
         <ManagerView
           skills={(catalog?.skills ?? []).map((skill) => skill.name)}
+          uploadableSkills={(catalog?.skills ?? []).filter((skill) => skill.source !== 'runtime').map((skill) => skill.name)}
           onChanged={() => { void hub.reloadCatalog() }}
           actions={importMenu}
         />

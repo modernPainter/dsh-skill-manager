@@ -46,6 +46,8 @@ let installAnimInjected = false
 export interface ManagerViewProps {
   /** 当前已安装 skills 名。 */
   skills: string[]
+  /** 有本地文件、可上传到仓库的技能名（运行时技能不在其中）。 */
+  uploadableSkills: string[]
   /** 安装成功后刷新目录。 */
   onChanged: () => void
   /** 仓库区标题行右侧的操作（导入入口由上层传入）。 */
@@ -94,6 +96,8 @@ const row: React.CSSProperties = { display: 'flex', gap: 8, alignItems: 'center'
 const input: React.CSSProperties = { padding: '6px 8px', border: '1px solid var(--dsh-border, #d9d9d9)', borderRadius: 6, fontSize: 13, minWidth: 180 }
 const button: React.CSSProperties = { padding: '5px 10px', border: '1px solid var(--dsh-border, #d9d9d9)', borderRadius: 6, background: 'transparent', cursor: 'pointer', fontSize: 13 }
 const primary: React.CSSProperties = { ...button, borderColor: 'var(--dsh-accent, #3b82f6)', color: 'var(--dsh-accent, #3b82f6)' }
+/** 不可用的主按钮：真正置灰，避免只有 disabled 属性但仍显示强调色。 */
+const primaryDisabled: React.CSSProperties = { ...primary, borderColor: 'var(--dsh-border, #d9d9d9)', color: 'rgba(0,0,0,0.3)', cursor: 'not-allowed', opacity: 0.7 }
 /** 卡片上的轻量按钮：灰边框、深灰字，默认低调；hover 时再显亮色。 */
 const ghostCardBtn: React.CSSProperties = {
   padding: '3px 8px',
@@ -269,6 +273,7 @@ export function ManagerView(props: ManagerViewProps): React.JSX.Element {
       <ReposSection
         repos={repos}
         skills={props.skills}
+        uploadableSkills={props.uploadableSkills}
         busy={busy}
         onRefresh={refresh}
         onChanged={props.onChanged}
@@ -421,6 +426,7 @@ function PublicSkillsSection(props: PublicSectionProps): React.JSX.Element {
 interface SectionProps {
   repos: GitRepoSource[]
   skills: string[]
+  uploadableSkills: string[]
   busy: string | null
   onRefresh: () => Promise<void>
   onChanged: () => void
@@ -516,11 +522,18 @@ function ReposSection(props: SectionProps): React.JSX.Element {
     }, 700)
   }
 
+  /** 推送目标仓库：没有令牌的仓库不可写，不进下拉列表。 */
+  const uploadRepos = props.repos.filter((entry) => entry.authId !== undefined && entry.authId !== '')
+
   const doUpload = async (): Promise<string> => {
-    if (uploadSlug === '') throw new Error('请选择目标仓库')
+    const repo = uploadRepos.find((entry) => entry.slug === uploadSlug)
+    if (repo === undefined) throw new Error('请选择带令牌的仓库')
     if (uploadNames.size === 0) throw new Error('请选择要上传的 skills')
+    const targetBranch = repo.defaultBranch.trim()
+    if (targetBranch === '') throw new Error('该仓库没有分支名，请先在高级选项里设置默认分支')
     const result = await managerApi.upload({
-      slug: uploadSlug,
+      slug: repo.slug,
+      branch: targetBranch,
       names: [...uploadNames],
       ...(uploadDir.trim() !== '' ? { dir: uploadDir.trim() } : {}),
     })
@@ -529,6 +542,18 @@ function ReposSection(props: SectionProps): React.JSX.Element {
       : ''
     return `已推送 ${result.uploaded.length} 个 skills 到 ${result.branch} @ ${result.commitSha.slice(0, 8)}${rejected}`
   }
+
+  /** 推送的前置条件；为 null 才允许点。没有令牌的仓库不可写，也不能作为推送目标。 */
+  const uploadRepo = uploadRepos.find((entry) => entry.slug === uploadSlug)
+  const uploadBlocked = uploadSlug === ''
+    ? '请选择目标仓库'
+    : uploadRepo === undefined
+      ? '该仓库没有令牌，无法推送'
+      : uploadNames.size === 0
+        ? '请选择要上传的 skills'
+        : uploadRepo.defaultBranch.trim() === ''
+          ? '该仓库没有分支名，请先在高级选项里设置默认分支'
+          : null
 
   return (
     <div>
@@ -670,20 +695,27 @@ function ReposSection(props: SectionProps): React.JSX.Element {
         <div style={{ ...row, marginBottom: 8 }}>
           <select style={input} value={uploadSlug} onChange={(event) => { setUploadSlug(event.target.value) }}>
             <option value=''>选择目标仓库</option>
-            {props.repos.map((repo) => <option key={repo.slug} value={repo.slug}>{repoDisplayName(repo.slug)}</option>)}
+            {uploadRepos.map((repo) => <option key={repo.slug} value={repo.slug}>{repoDisplayName(repo.slug)}</option>)}
           </select>
           <input style={input} placeholder='仓库内目录（skills）' value={uploadDir} onChange={(event) => { setUploadDir(event.target.value) }} />
-          <button type='button' style={primary} disabled={props.busy !== null || uploadNames.size === 0 || uploadSlug === ''} onClick={() => {
-            props.confirm({
-              title: '推送 skills 到仓库',
-              message: `将 ${uploadNames.size} 个本地 skills 推送到 ${repoDisplayName(uploadSlug)}（上传前会做内容审计，命中阻断规则会被拒绝）。`,
-              confirmLabel: '推送',
-              run: async () => { await props.run('upload', doUpload) },
-            })
-          }}>推送 {uploadNames.size} 个</button>
+          <button
+            type='button'
+            style={props.busy !== null || uploadBlocked !== null ? primaryDisabled : primary}
+            disabled={props.busy !== null || uploadBlocked !== null}
+            title={uploadBlocked ?? '推送选中的 skills'}
+            onClick={() => {
+              props.confirm({
+                title: '推送 skills 到仓库',
+                message: `将 ${uploadNames.size} 个本地 skills 推送到 ${repoDisplayName(uploadSlug)}（上传前会做内容审计，命中阻断规则会被拒绝）。`,
+                confirmLabel: '推送',
+                run: async () => { await props.run('upload', doUpload) },
+              })
+            }}
+          >推送 {uploadNames.size} 个</button>
         </div>
+        {uploadRepos.length === 0 ? <p style={muted}>没有带令牌的仓库。添加仓库时填写 HTTPS Token 后才能推送。</p> : null}
         <div style={{ ...row, maxHeight: 180, overflow: 'auto' }}>
-          {props.skills.length === 0 ? <span style={muted}>没有可上传的本地 skills。</span> : props.skills.map((name) => (
+          {props.uploadableSkills.length === 0 ? <span style={muted}>没有可上传的本地 skills。</span> : props.uploadableSkills.map((name) => (
             <label key={name} style={{ ...muted, fontSize: 12 }}>
               <input
                 type='checkbox'
