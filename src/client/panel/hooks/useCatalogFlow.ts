@@ -14,7 +14,7 @@ import type {
 } from '../../../protocol.ts'
 import type { SkillHubApi } from '../../api.ts'
 import { errorMessage, tt } from '../../helpers.ts'
-import { filterSkillsByQuery, filterSkillsByStatus, sortSkills, type InvocationFilter, type SkillStatusFilter, type SortKey } from '../../grouping.ts'
+import { filterSkillsByQuery, filterSkillsByStatus, sortSkills, type SkillStatusFilter, type SortKey } from '../../grouping.ts'
 import { runFlow, type FlowNotices, type UsesMap } from './shared.ts'
 
 export type { SkillStatusFilter }
@@ -60,7 +60,6 @@ export function useCatalogFlow(
   const [formBusy, setFormBusy] = useState(false)
   const [formMessage, setFormMessage] = useState<{ kind: 'error' | 'success'; text: string } | null>(null)
   const [fixingPaths, setFixingPaths] = useState<ReadonlySet<string>>(new Set())
-  const [invocationFilter, setInvocationFilter] = useState<InvocationFilter>('all')
   const [statusFilter, setStatusFilter] = useState<SkillStatusFilter>('all')
   const [sortKey, setSortKey] = useState<SortKey>('name')
 
@@ -246,12 +245,11 @@ export function useCatalogFlow(
   const viewNames = useMemo(() => new Set((catalog?.skills ?? []).filter((skill) => skill.modelOverride !== true).map((skill) => skill.name)), [catalog])
 
   /**
-   * Search + invocation filters. These are view-independent: every view honours
-   * them, so they live above the status split.
+   * 搜索过滤对所有视图生效，因此放在状态拆分之前。
    */
   const searched = useMemo(
-    () => filterSkillsByQuery(catalog?.skills ?? [], search, invocationFilter),
-    [catalog, search, invocationFilter],
+    () => filterSkillsByQuery(catalog?.skills ?? [], search),
+    [catalog, search],
   )
   /**
    * `searched` plus the status filter — the row source for list views. Role
@@ -271,21 +269,20 @@ export function useCatalogFlow(
   /** Same ordering without the status filter — the roles view's row source. */
   const searchedSorted = useMemo(() => sortSkills(searched, sortKey, (name) => uses.get(name)?.count), [searched, sortKey, uses])
 
-  /** Clear the list filters (search + source + invocation + status) back to the full view. */
+  /** Clear the list filters (search + source + status) back to the full view. */
   const clearListFilters = useCallback((): void => {
     setSearch('')
     clearSourceFilter()
-    setInvocationFilter('all')
     setStatusFilter('all')
   }, [clearSourceFilter])
 
   return {
     catalog, loading, detail, detailLoading, busyNames, search, workspace,
     showForm, formName, formDesc, formBody, formRoot, formWorkspace, workspaces, formBusy, formMessage, fixingPaths,
-    invocationFilter, statusFilter, sortKey, actionNames, viewNames,
+    statusFilter, sortKey, actionNames, viewNames,
     filtered, sorted, searchedSorted, shortenedCount,
     setDetail, setSearch, setWorkspace, setShowForm, setFormName, setFormDesc, setFormBody,
-    setFormRoot, setFormWorkspace, setFormMessage, setInvocationFilter, setStatusFilter, setSortKey,
+    setFormRoot, setFormWorkspace, setFormMessage, setStatusFilter, setSortKey,
     load, openDetail, toggle, enableDisabled, batchToggleNames, fixDiagnostic, create, clearListFilters,
   }
 }

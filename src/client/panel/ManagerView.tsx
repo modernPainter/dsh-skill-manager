@@ -19,8 +19,32 @@ import {
   type PublicSkillEntry,
 } from '../manager-api.ts'
 
+/** 安装动画的 keyframes，只注入一次。 */
+const INSTALL_ANIM_STYLE = `
+@keyframes dsh-spin { to { transform: rotate(360deg); } }
+@keyframes dsh-install-flash {
+  0% { box-shadow: 0 0 0 0 rgba(34,197,94,0.35); border-color: var(--dsh-border, #d9d9d9); }
+  40% { box-shadow: 0 0 0 4px rgba(34,197,94,0.2); border-color: #22c55e; }
+  100% { box-shadow: 0 0 0 0 rgba(34,197,94,0); border-color: var(--dsh-border, #d9d9d9); }
+}
+.dsh-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: dsh-spin 0.7s linear infinite;
+  vertical-align: middle;
+}
+.dsh-install-flash {
+  animation: dsh-install-flash 0.9s ease-out;
+}
+`
+let installAnimInjected = false
+
 export interface ManagerViewProps {
-  /** 当前已安装 skills 名，用于上传的选择器。 */
+  /** 当前已安装 skills 名。 */
   skills: string[]
   /** 安装成功后刷新目录。 */
   onChanged: () => void
@@ -70,21 +94,31 @@ const row: React.CSSProperties = { display: 'flex', gap: 8, alignItems: 'center'
 const input: React.CSSProperties = { padding: '6px 8px', border: '1px solid var(--dsh-border, #d9d9d9)', borderRadius: 6, fontSize: 13, minWidth: 180 }
 const button: React.CSSProperties = { padding: '5px 10px', border: '1px solid var(--dsh-border, #d9d9d9)', borderRadius: 6, background: 'transparent', cursor: 'pointer', fontSize: 13 }
 const primary: React.CSSProperties = { ...button, borderColor: 'var(--dsh-accent, #3b82f6)', color: 'var(--dsh-accent, #3b82f6)' }
+/** 卡片上的轻量按钮：灰边框、深灰字，默认低调；hover 时再显亮色。 */
+const ghostCardBtn: React.CSSProperties = {
+  padding: '3px 8px',
+  border: '1px solid rgba(0,0,0,0.15)',
+  borderRadius: 6,
+  background: 'transparent',
+  color: 'rgba(0,0,0,0.65)',
+  cursor: 'pointer',
+  fontSize: 12,
+  lineHeight: 1.3,
+}
 /** 带图标的小按钮：图标与文字垂直居中，间距 4px。 */
 const buttonWithIcon: React.CSSProperties = { ...button, display: 'inline-flex', alignItems: 'center', gap: 4 }
 const danger: React.CSSProperties = { ...button, borderColor: '#d9534f', color: '#d9534f' }
 const muted: React.CSSProperties = { fontSize: 12, opacity: 0.7 }
 const list: React.CSSProperties = { listStyle: 'none', margin: 0, padding: 0 }
 const item: React.CSSProperties = { ...box, marginBottom: 8 }
-const banner: React.CSSProperties = { ...box, borderColor: '#d9534f', color: '#a12f2b' }
-/** 扫描结果卡片网格：一个 skills 一张卡，点卡片上的「安装」即装到本地 skills 库。 */
-const cardGrid: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 10, marginTop: 10 }
+/** 扫描结果卡片网格：一个 skills 一张卡，紧凑高度。 */
+const cardGrid: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 8, marginTop: 10 }
 const card: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  gap: 6,
-  minHeight: 110,
-  padding: 10,
+  gap: 4,
+  minHeight: 78,
+  padding: '8px 10px 6px',
   border: '1px solid var(--dsh-border, #d9d9d9)',
   borderRadius: 10,
 }
@@ -106,6 +140,31 @@ const desc: React.CSSProperties = {
 }
 const path: React.CSSProperties = { fontSize: 11, opacity: 0.55, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
 
+/**
+ * 云效公共技能库的持久化缓存：
+ *   - 只在首次进入、本地完全没有缓存时自动拉取一次；
+ *   - 刷新页面 / 切换页签 / 重启服务都直接复用缓存，不再自动请求；
+ *   - 只有「更新」按钮才会重新拉取并覆盖缓存。
+ */
+const PUBLIC_CACHE_KEY = 'dsh-skill-manager:public-skills-cache'
+interface PublicSkillsCache {
+  skills: PublicSkillEntry[]
+  meta: { ref: string; fileCount: number }
+  atMs: number
+}
+function loadPublicCache(): PublicSkillsCache | null {
+  try {
+    const raw = localStorage.getItem(PUBLIC_CACHE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as PublicSkillsCache
+    if (!parsed.skills || !parsed.meta || typeof parsed.atMs !== 'number') return null
+    return parsed
+  } catch { return null }
+}
+function savePublicCache(cache: PublicSkillsCache): void {
+  try { localStorage.setItem(PUBLIC_CACHE_KEY, JSON.stringify(cache)) } catch { /* quota / 禁用 storage 时静默跳过 */ }
+}
+
 export function ManagerView(props: ManagerViewProps): React.JSX.Element {
   const [repos, setRepos] = useState<GitRepoSource[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -113,11 +172,36 @@ export function ManagerView(props: ManagerViewProps): React.JSX.Element {
   const [pending, setPending] = useState<PendingConfirm | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
 
-  /** 云效公共技能库：进页面即拉取，不需要刷新按钮。 */
-  const [publicSkills, setPublicSkills] = useState<PublicSkillEntry[]>([])
-  const [publicMeta, setPublicMeta] = useState<{ ref: string; fileCount: number } | null>(null)
-  const [publicLoading, setPublicLoading] = useState(true)
+  /** 从 localStorage 取初始缓存；没有时才处于 loading 态等待首次自动拉取。 */
+  const initialCache = loadPublicCache()
+  const [publicSkills, setPublicSkills] = useState<PublicSkillEntry[]>(() => initialCache?.skills ?? [])
+  const [publicMeta, setPublicMeta] = useState<{ ref: string; fileCount: number } | null>(() => initialCache?.meta ?? null)
+  const [publicLoading, setPublicLoading] = useState(initialCache === null)
   const [publicError, setPublicError] = useState<string | null>(null)
+  const [publicUpdatedAt, setPublicUpdatedAt] = useState<Date | null>(() => initialCache ? new Date(initialCache.atMs) : null)
+
+  const loadPublicSkills = useCallback(async (announce = false): Promise<void> => {
+    setPublicLoading(true)
+    setPublicError(null)
+    // 加载过程本身也用轻提示，不占列表布局。
+    setNotice('正在加载云效公共技能库…')
+    try {
+      const payload = await managerApi.listPublicSkills()
+      const meta = { ref: payload.ref, fileCount: payload.fileCount }
+      const atMs = Date.now()
+      savePublicCache({ skills: payload.skills, meta, atMs })
+      setPublicSkills(payload.skills)
+      setPublicMeta(meta)
+      setPublicUpdatedAt(new Date(atMs))
+      // 手动「更新」才有完成提示；首次自动加载成功后安静收起。
+      setNotice(announce ? '云效公共技能库已更新，共 ' + payload.skills.length + ' 个技能' : null)
+    } catch (caught) {
+      setNotice(null)
+      setPublicError('云效公共技能库加载失败：' + errorMessage(caught))
+    } finally {
+      setPublicLoading(false)
+    }
+  }, [])
 
   const refresh = useCallback(async (): Promise<void> => {
     setError(null)
@@ -130,24 +214,13 @@ export function ManagerView(props: ManagerViewProps): React.JSX.Element {
   }, [])
 
   useEffect(() => { void refresh() }, [refresh])
-
+  // 本地完全没有缓存（首次进入）才自动拉取一次；之后都由「更新」按钮触发。
+  const didAutoFetchRef = useRef(initialCache !== null)
   useEffect(() => {
-    let cancelled = false
-    void (async () => {
-      try {
-        const payload = await managerApi.listPublicSkills()
-        if (cancelled) return
-        setPublicSkills(payload.skills)
-        setPublicMeta({ ref: payload.ref, fileCount: payload.fileCount })
-        setPublicError(null)
-      } catch (caught) {
-        if (!cancelled) setPublicError('云效公共技能库加载失败：' + errorMessage(caught))
-      } finally {
-        if (!cancelled) setPublicLoading(false)
-      }
-    })()
-    return () => { cancelled = true }
-  }, [])
+    if (didAutoFetchRef.current) return
+    didAutoFetchRef.current = true
+    void loadPublicSkills()
+  }, [loadPublicSkills])
 
   const run = async (label: string, action: () => Promise<string | void>): Promise<void> => {
     setBusy(label)
@@ -172,13 +245,20 @@ export function ManagerView(props: ManagerViewProps): React.JSX.Element {
         {props.actions ?? null}
       </div>
 
-      {error !== null || publicError !== null ? <div style={banner} role='alert'>{error ?? publicError}</div> : null}
       <Toast message={notice} onDone={() => { setNotice(null) }} />
+      <Toast
+        message={error ?? publicError}
+        tone='error'
+        onDone={() => { setError(null); setPublicError(null) }}
+      />
 
       <PublicSkillsSection
         skills={publicSkills}
         meta={publicMeta}
         loading={publicLoading}
+        loadingError={publicError}
+        updatedAt={publicUpdatedAt}
+        onUpdate={() => { void loadPublicSkills(true) }}
         installedNames={props.skills}
         busy={busy}
         run={run}
@@ -226,6 +306,9 @@ interface PublicSectionProps {
   skills: PublicSkillEntry[]
   meta: { ref: string; fileCount: number } | null
   loading: boolean
+  loadingError: string | null
+  updatedAt: Date | null
+  onUpdate: () => void
   /** 本地已安装的 skills 名（与仓库区共用同一份）。 */
   installedNames: string[]
   busy: string | null
@@ -236,24 +319,45 @@ interface PublicSectionProps {
 
 /** 云效公共技能库：列表只读，安装复用仓库的落盘语义（覆盖前二次确认）。 */
 function PublicSkillsSection(props: PublicSectionProps): React.JSX.Element {
-  const install = async (entry: PublicSkillEntry, installed: boolean): Promise<void> => {
-    const action = async (): Promise<string> => {
-      const result = await managerApi.installPublicSkill(entry.name, installed)
+  /** 每张卡片独立的 loading 状态，不阻塞其它卡片。 */
+  const [installing, setInstalling] = useState<Set<string>>(new Set())
+  /** 安装成功后的短暂闪光：完成即清掉，让动画只跑一遍。 */
+  const [flash, setFlash] = useState<Set<string>>(new Set())
+  /** 只注入一次 keyframes，避免每次 render 都 appendChild。 */
+  useEffect(() => {
+    if (installAnimInjected) return
+    installAnimInjected = true
+    const style = document.createElement('style')
+    style.textContent = INSTALL_ANIM_STYLE
+    document.head.appendChild(style)
+    return () => { /* 页面常驻，不必卸载 */ }
+  }, [])
+
+  const runInstall = async (entry: PublicSkillEntry): Promise<void> => {
+    setInstalling((prev) => new Set(prev).add(entry.name))
+    try {
+      const result = await managerApi.installPublicSkill(entry.name, false)
       if (result.status !== 'installed') throw new Error(result.error ?? '安装失败')
       props.onChanged()
-      return '已安装 ' + result.name
+      // 触发成功闪光；900ms 后清除，让下一次同一技能能再动画。
+      setFlash((prev) => new Set(prev).add(entry.name))
+      window.setTimeout(() => setFlash((prev) => { const next = new Set(prev); next.delete(entry.name); return next }), 950)
+    } finally {
+      setInstalling((prev) => { const next = new Set(prev); next.delete(entry.name); return next })
     }
-    const label = 'public-install:' + entry.name
-    if (!installed) {
-      await props.run(label, action)
+  }
+
+  const install = async (entry: PublicSkillEntry, installed: boolean): Promise<void> => {
+    if (installed) {
+      props.confirm({
+        title: '覆盖安装 ' + entry.name,
+        message: `本地已存在同名 skills「${entry.name}」，将从云效公共技能库重新安装并覆盖（原版本进回收站）。`,
+        confirmLabel: '覆盖安装',
+        run: async () => { await runInstall(entry) },
+      })
       return
     }
-    props.confirm({
-      title: '覆盖安装 ' + entry.name,
-      message: `本地已存在同名 skills「${entry.name}」，将从云效公共技能库重新安装并覆盖（原版本进回收站）。`,
-      confirmLabel: '覆盖安装',
-      run: async () => { await props.run(label, action) },
-    })
+    await runInstall(entry)
   }
 
   return (
@@ -261,30 +365,47 @@ function PublicSkillsSection(props: PublicSectionProps): React.JSX.Element {
       <div style={{ ...row, marginBottom: 4 }}>
         <strong>云效公共技能库</strong>
         <span style={muted}>
-          {props.meta !== null ? `${props.meta.ref} · ${props.meta.fileCount} 个文件 · ${props.skills.length} 个技能` : '加载中…'}
+          {props.meta !== null
+            ? `${props.meta.ref} · ${props.meta.fileCount} 个文件 · ${props.skills.length} 个技能`
+            : props.loadingError !== null ? '加载失败' : '加载中…'}
         </span>
+        <span style={{ flex: 1 }} />
+        {props.updatedAt !== null ? <span style={muted}>上次更新 {props.updatedAt.toLocaleTimeString()}</span> : null}
+        <button
+          type='button'
+          style={button}
+          disabled={props.loading}
+          onClick={() => { props.onUpdate() }}
+        >{props.loading ? '更新中…' : '更新'}</button>
       </div>
-      {props.loading ? <p style={muted}>正在加载云效公共技能库…</p> : null}
       {!props.loading && props.skills.length === 0 ? <p style={muted}>公共技能库暂无可用技能。</p> : null}
       {props.skills.length > 0 ? (
         <div style={cardGrid}>
           {props.skills.map((entry) => {
             const installed = props.installedNames.includes(entry.name)
+            const busyCard = installing.has(entry.name)
+            const flashCard = flash.has(entry.name)
             return (
-              <div key={entry.name} style={card}>
+              <div key={entry.name} style={card} className={flashCard ? 'dsh-install-flash' : undefined}>
                 <div style={{ ...row, gap: 6 }}>
                   <strong style={{ fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entry.name}</strong>
-                  {installed ? <span style={badge}>已安装</span> : null}
+                  {installed && !busyCard ? <span style={badge}>已安装</span> : null}
                 </div>
                 <div style={desc}>来自云效公共技能库</div>
                 <div style={path} title={entry.path}>{entry.path}</div>
                 <div style={{ ...row, gap: 6, marginTop: 'auto' }}>
                   <button
                     type='button'
-                    style={primary}
-                    disabled={props.busy !== null}
+                    style={ghostCardBtn}
+                    disabled={busyCard}
                     onClick={() => { void install(entry, installed) }}
-                  >{installed ? '重新安装' : '安装'}</button>
+                  >
+                    {busyCard
+                      ? <><span className='dsh-spinner' style={{ marginRight: 4 }} />安装中…</>
+                      : installed
+                        ? '重新安装'
+                        : '安装'}
+                  </button>
                 </div>
               </div>
             )
@@ -442,7 +563,7 @@ function ReposSection(props: SectionProps): React.JSX.Element {
         <p style={muted}>支持 GitHub / GitLab / Gitea / 云效 Codeup；仓库根目录可含 skill-manifest.json，缺失时自动扫描目录。</p>
       </section>
 
-      {props.repos.length === 0 ? <div style={box}>还没有配置仓库。添加后即可扫描、下载、上传 skills。</div> : null}
+      {props.repos.length === 0 ? <div style={box}>还没有配置仓库。添加后即可扫描、安装、上传 skills。</div> : null}
 
       <ul style={list}>
         {props.repos.map((repo) => (
@@ -478,6 +599,7 @@ function ReposSection(props: SectionProps): React.JSX.Element {
             <strong>扫描结果 · {repoDisplayName(scan.source)}</strong>
             <span style={muted}>{scan.ref} @ {scan.commitSha.slice(0, 8)} · {scan.skills.length} 个 skills</span>
             <span style={{ flex: 1 }} />
+            <button type='button' style={{ ...button, padding: '2px 6px', fontSize: 11 }} onClick={() => { setScan(null) }}>关闭</button>
             <label style={muted}><input type='checkbox' checked={overwrite} onChange={(event) => { setOverwrite(event.target.checked) }} /> 覆盖已存在</label>
             {overwrite ? <label style={muted}><input type='checkbox' checked={allowLocalOverwrite} onChange={(event) => { setAllowLocalOverwrite(event.target.checked) }} /> 允许覆盖本地修改</label> : null}
             <button
@@ -551,10 +673,10 @@ function ReposSection(props: SectionProps): React.JSX.Element {
             {props.repos.map((repo) => <option key={repo.slug} value={repo.slug}>{repoDisplayName(repo.slug)}</option>)}
           </select>
           <input style={input} placeholder='仓库内目录（skills）' value={uploadDir} onChange={(event) => { setUploadDir(event.target.value) }} />
-          <button type='button' style={primary} disabled={props.busy !== null || uploadNames.size === 0} onClick={() => {
+          <button type='button' style={primary} disabled={props.busy !== null || uploadNames.size === 0 || uploadSlug === ''} onClick={() => {
             props.confirm({
               title: '推送 skills 到仓库',
-              message: `将 ${uploadNames.size} 个本地 skills 推送到所选仓库（上传前会做内容审计，命中阻断规则会被拒绝）。`,
+              message: `将 ${uploadNames.size} 个本地 skills 推送到 ${repoDisplayName(uploadSlug)}（上传前会做内容审计，命中阻断规则会被拒绝）。`,
               confirmLabel: '推送',
               run: async () => { await props.run('upload', doUpload) },
             })

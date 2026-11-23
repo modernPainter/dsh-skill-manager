@@ -217,24 +217,19 @@ export function countInstalled(record: { skills: readonly string[] } | undefined
 
 /** Status filter values shared by the list shell and the row components. */
 export type SkillStatusFilter = 'all' | 'enabled' | 'disabled'
-/** Invocation filter values (who may trigger the skill). */
-export type InvocationFilter = 'all' | 'model' | 'user'
 
 /**
- * Free-text + invocation filtering. Deliberately view-independent: every view
- * applies it, including the role cards, because typing in the search box is an
- * explicit, momentary narrowing.
+ * Free-text filtering. Deliberately view-independent: every view applies it,
+ * including the role cards, because typing in the search box is an explicit,
+ * momentary narrowing.
  */
 export function filterSkillsByQuery(
   skills: readonly CatalogSkill[],
   query: string,
-  invocation: InvocationFilter,
 ): CatalogSkill[] {
   const normalized = query.trim().toLocaleLowerCase()
+  if (normalized.length === 0) return [...skills]
   return skills.filter((skill) => {
-    if (invocation === 'model' && !skill.invocation.modelInvocable) return false
-    if (invocation === 'user' && !skill.invocation.userInvocable) return false
-    if (normalized.length === 0) return true
     return skill.name.toLocaleLowerCase().includes(normalized)
       || skill.description.toLocaleLowerCase().includes(normalized)
       || skill.displayName?.toLocaleLowerCase().includes(normalized)

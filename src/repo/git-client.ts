@@ -178,7 +178,12 @@ export function fetchError(context: string, response: Response, source: GitRepoS
       403,
     )
   }
-  return new RepoFetchError(context + ' (HTTP ' + response.status + ')', response.status === 404 ? 404 : fallbackStatus)
+  return new RepoFetchError(
+    context + ' (HTTP ' + response.status + ')',
+    // 404 与 409 都要保留：前者是「不存在」，后者常见于空仓库（GitHub 返回
+    // "Git Repository is empty"），上层据此走首提交分支。
+    response.status === 404 || response.status === 409 ? response.status : fallbackStatus,
+  )
 }
 
 /** 是否限流/中断类错误。 */

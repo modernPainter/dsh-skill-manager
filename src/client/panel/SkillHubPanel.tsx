@@ -16,7 +16,7 @@ import { useEffect, useRef, useState } from 'react'
 import { IconSkillOutline16 } from '../icons.tsx'
 import type { SkillHubApi } from '../api.ts'
 import { errorMessage, tt } from '../helpers.ts'
-import { filterBySource, isProjectSource, PRIVATE_SOURCE, type SortKey } from '../grouping.ts'
+import { isProjectSource } from '../grouping.ts'
 import { SkillDetailView } from './SkillDetailView.tsx'
 import { TagEditorView } from './TagEditorView.tsx'
 import { LibraryView } from './LibraryView.tsx'
@@ -42,15 +42,11 @@ export interface SkillHubPanelProps {
 export function SkillHubPanel(props: SkillHubPanelProps): React.JSX.Element {
   const hub = useSkillHub(props.api)
   const isSidebar = props.mode === 'sidebar'
-  /** 工作区输入草稿：回车才应用，避免每次按键都触发目录重拉。 */
-  const [workspaceDraft, setWorkspaceDraft] = useState('')
   /** 「从其他 Agent 导入」弹窗开合。 */
   const [showForeign, setShowForeign] = useState(false)
   /** ZIP 导入：隐藏的文件选择框 + 上传中状态。 */
   const zipInputRef = useRef<HTMLInputElement | null>(null)
   const [zipBusy, setZipBusy] = useState(false)
-  /** 「筛选」面板开合（来源 + 调用方式收进这里；搜索/排序/视图切换始终可见）。 */
-  const [filtersOpen, setFiltersOpen] = useState(false)
   /** 「更多」溢出菜单：低频导入动作收进这里，保持顶部克制。 */
   const [moreOpen, setMoreOpen] = useState(false)
   /** 「⋯」菜单锚点：点击菜单外部时用它判断是否属于菜单自身。 */
@@ -59,16 +55,15 @@ export function SkillHubPanel(props: SkillHubPanelProps): React.JSX.Element {
   const [page, setPage] = useState<'repos' | null>(null)
   const {
     catalog, loading, loadError, successBanner, detail, detailLoading, showForm, formName, formDesc,
-    formBody, formRoot, formWorkspace, workspaces, formBusy, formMessage, hubConfig, tab, generalView, sourceFilter, statusFilter, sortKey, search,
-    workspace, setWorkspace,
-    sourcesState, tagBusy, batchBusy, sourceOptions, filtered,
+    formBody, formRoot, formWorkspace, workspaces, formBusy, formMessage, hubConfig, tab, generalView, search,
+    sourcesState, tagBusy, batchBusy, filtered,
     conflictDialog, confirmDialog, deleteSkillDialog, deleteGroupDialog, confirmClearTrash, branchChoice, branchBusy, marketSyncDialog,
     syncBusy, editingTag, editName, membersDraft, editSearch, uses, groupsState, sourceCheck, checkingSource, syncingSource,
     setLoadError, setSuccessBanner, setDetail, setShowForm, setFormName, setFormDesc, setFormBody, setFormRoot, setFormWorkspace, setFormMessage,
-    setSourceFilter, setStatusFilter, setSortKey, setSearch, setConflictDialog, setConfirmDialog, setDeleteSkillDialog, setDeleteGroupDialog,
+    setSearch, setConflictDialog, setConfirmDialog, setDeleteSkillDialog, setDeleteGroupDialog,
     setConfirmClearTrash, setBranchChoice, setMarketSyncDialog, setEditingTag, setEditName, setMembersDraft, setEditSearch,
     checkSources, requestSync, requestDelete, clearTrash, runDeleteSkill, runDeleteGroup,
-    runConfirmed, resolveConflict, confirmBranchChoice, confirmMarketSync, create, saveTag, deleteTag, enableDisabled, reloadCatalog,
+    runConfirmed, resolveConflict, confirmBranchChoice, confirmMarketSync, create, saveTag, deleteTag, reloadCatalog,
   } = hub
   const { shortenedCount, fixingPaths, clearListFilters } = hub
   /**
@@ -147,13 +142,6 @@ export function SkillHubPanel(props: SkillHubPanelProps): React.JSX.Element {
   }, [detail, setDetail])
 
   if (detail !== null) {
-    const disabledRecord = detail.source !== undefined && isProjectSource(detail.source)
-      ? undefined
-      : catalog?.disabled.find((record) => {
-          if (detail.path === undefined) return record.name === detail.name
-          // 台账 path 就是发现文件本身（停用不再改名），直接比即可。
-          return record.path === detail.path
-        })
     return (
       <div className={css.detailOverlay} role='presentation' onMouseDown={(event) => { if (event.target === event.currentTarget) setDetail(null) }}>
         <div className={css.detailModal} role='dialog' aria-modal='true' aria-label={tt('detail.title')}>
@@ -166,13 +154,11 @@ export function SkillHubPanel(props: SkillHubPanelProps): React.JSX.Element {
             sourceCheck={sourceCheck}
             checkingSource={checkingSource}
             syncingSource={syncingSource}
-            disabled={disabledRecord !== undefined}
-            onEnable={disabledRecord !== undefined ? () => { void enableDisabled(disabledRecord).then(() => { setDetail(null) }) } : undefined}
+            modal
             onBack={() => { setDetail(null) }}
             onCheck={(repo) => { void checkSources(repo) }}
             onSync={requestSync}
             onFollowDelete={requestDelete}
-            modal
           />
         </div>
       </div>
@@ -206,38 +192,17 @@ export function SkillHubPanel(props: SkillHubPanelProps): React.JSX.Element {
     )
   }
 
-  /**
-   * The roles view ignores the persisted status/source filters (a role is a
-   * curated roster), so those filters must not count as active there, and the
-   * header must not report a shrunken total.
-   */
   const rolesView = tab === 'general' && generalView === 'scene'
-  const statusFilterActive = !rolesView && statusFilter !== 'all'
-  /** 生效中的筛选条件数（来源 + 调用方式 + 状态），显示在「筛选」按钮上。 */
-  const hasSourceFilter = tab === 'general' && !rolesView && sourceFilter !== 'all'
-  const activeFilterCount = (hasSourceFilter ? 1 : 0) + (hub.invocationFilter !== 'all' ? 1 : 0) + (statusFilterActive ? 1 : 0)
 
   const projectCount = catalog?.skills.filter((skill) => isProjectSource(skill.source)).length ?? 0
   const generalAllActive = (catalog?.skills ?? []).filter((skill) => !isProjectSource(skill.source))
-  const generalSkills = filterBySource(generalAllActive, sourceFilter, hub.origins)
   // 停用技能已在 `catalog.skills` 里带 `modelOverride`，sidecar 的
   // `catalog.disabled` 只是台账。计数只能数 skills[] 一次 —— 以前把台账
   // 再加一遍，头部的「共 N 个」会把停用技能算成两份。
-  const generalCount = generalSkills.length
-  const generalDisabledAll = generalSkills.filter((skill) => skill.modelOverride === true).length
-  const generalEnabledCount = generalCount - generalDisabledAll
-  const generalActiveShown = rolesView
-    ? generalAllActive.length
-    : statusFilter === 'disabled'
-      ? generalDisabledAll
-      : statusFilter === 'enabled'
-        ? generalEnabledCount
-        : generalCount
+  const generalActiveShown = generalAllActive.length
   const scopedSkills = (catalog?.skills ?? []).filter((skill) => tab === 'workspace' ? isProjectSource(skill.source) : !isProjectSource(skill.source))
   const rowSource = rolesView ? hub.searchedSorted : filtered
-  const scopedFilteredBase = rowSource.filter((skill) => tab === 'workspace' ? isProjectSource(skill.source) : !isProjectSource(skill.source))
-  const scopedFiltered = tab === 'general' && !rolesView ? filterBySource(scopedFilteredBase, sourceFilter, hub.origins) : scopedFilteredBase
-  const visibleDisabledCount = scopedFiltered.filter((skill) => skill.modelOverride === true).length
+  const scopedFiltered = rowSource.filter((skill) => tab === 'workspace' ? isProjectSource(skill.source) : !isProjectSource(skill.source))
   const shownCount = scopedFiltered.length
   const totalCount = tab === 'general' ? generalActiveShown : scopedSkills.length
   const headerCount = tab === 'workspace'
@@ -274,10 +239,7 @@ export function SkillHubPanel(props: SkillHubPanelProps): React.JSX.Element {
       <div className={css.header}>
         <h2 className={css.title}><IconSkillOutline16 size={16} className={css.titleIcon} /> {tt('panel.title')}{catalog !== null ? <span className={css.pluginVersion}>v{catalog.pluginVersion}</span> : null}</h2>
         {headerCount !== null && page === null
-          ? <span className={css.headerCount}>
-              {tt('panel.count', { count: headerCount })}
-              {tab === 'general' && catalog !== null && (rolesView || statusFilter !== 'enabled') && visibleDisabledCount > 0 ? ' · ' + tt('panel.disabledCount', { count: visibleDisabledCount }) : null}
-            </span>
+          ? <span className={css.headerCount}>{tt('panel.count', { count: headerCount })}</span>
           : null}
         {catalog !== null && !catalog.complete ? <span className={css.hint}>{tt('panel.incomplete')}</span> : null}
         {catalog !== null && (catalog.duplicateNames?.length ?? 0) > 0 ? <button type='button' className={css.opBtn} title={tt('row.duplicateHint')} onClick={() => { clearListFilters() }}>⚠ {tt('row.duplicate')}×{(catalog.duplicateNames ?? []).length}</button> : null}
@@ -357,81 +319,11 @@ export function SkillHubPanel(props: SkillHubPanelProps): React.JSX.Element {
         <>
           <div className={css.filterBar}>
             <input className={css.search} value={search} onChange={(event) => { setSearch(event.target.value) }} placeholder={tt('panel.search')} />
-            <button
-              type='button'
-              className={css.filterButton + (filtersOpen || activeFilterCount > 0 ? ' ' + css.filterButtonActive : '')}
-              aria-expanded={filtersOpen}
-              aria-controls='skill-hub-filter-panel'
-              onClick={() => { setFiltersOpen((value) => !value) }}
-            >{tt('filter.title')}{activeFilterCount > 0 ? ' (' + activeFilterCount + ')' : ''}</button>
             <button type='button' className={css.button + ' ' + css.primary} onClick={() => { setShowForm((value) => !value) }}>{tt('panel.new')}</button>
           </div>
-          {filtersOpen ? (
-            <div className={css.filterPanel} id='skill-hub-filter-panel'>
-              {rolesView ? <p className={css.filterNote}>{tt('role.filterNote')}</p> : null}
-              {tab === 'workspace' ? (
-                <label className={css.filterField}>
-                  <span className={css.formLabel}>{tt('panel.workspaceLabel')}</span>
-                  <span className={css.workspaceBox}>
-                    <input
-                      className={css.search + ' ' + css.workspaceInput}
-                      value={workspaceDraft}
-                      placeholder={workspace !== '' ? workspace : tt('panel.workspacePlaceholder')}
-                      title={tt('panel.workspaceHint')}
-                      onChange={(event) => { setWorkspaceDraft(event.target.value) }}
-                      onKeyDown={(event) => { if (event.key === 'Enter') setWorkspace((event.target as HTMLInputElement).value.trim()) }}
-                    />
-                    {workspace !== ''
-                      ? <button type='button' className={css.opBtn} aria-label={tt('panel.workspaceClear')} title={tt('panel.workspaceClear')} onClick={() => { setWorkspace(''); setWorkspaceDraft('') }}>✕</button>
-                      : null}
-                  </span>
-                </label>
-              ) : null}
-              {tab === 'general' && !rolesView ? (
-                <label className={css.filterField}>
-                  <span className={css.formLabel}>{tt('filter.source')}</span>
-                  <select className={css.select} value={sourceFilter} onChange={(event) => { setSourceFilter(event.target.value) }}>
-                    <option value='all'>{tt('filter.allSources')}</option>
-                    {sourceOptions.map((source) => (
-                      <option key={source} value={source}>{source === PRIVATE_SOURCE ? tt('filter.private') : source}</option>
-                    ))}
-                  </select>
-                </label>
-              ) : null}
-              {rolesView ? null : (
-                <label className={css.filterField}>
-                  <span className={css.formLabel}>{tt('filter.status')}</span>
-                  <select className={css.select} value={statusFilter} onChange={(event) => { setStatusFilter(event.target.value as 'all' | 'enabled' | 'disabled') }}>
-                    <option value='all'>{tt('filter.statusAll')}</option>
-                    <option value='enabled'>{tt('filter.statusEnabled')}</option>
-                    <option value='disabled'>{tt('filter.statusDisabled')}</option>
-                  </select>
-                </label>
-              )}
-              <label className={css.filterField}>
-                <span className={css.formLabel}>{tt('sort.label')}</span>
-                <select className={css.select} value={sortKey} onChange={(event) => { setSortKey(event.target.value as SortKey) }}>
-                  <option value='name'>{tt('sort.name')}</option>
-                  <option value='added'>{tt('sort.added')}</option>
-                  <option value='uses'>{tt('sort.uses')}</option>
-                </select>
-              </label>
-              <label className={css.filterField}>
-                <span className={css.formLabel}>{tt('filter.invocation')}</span>
-                <select className={css.select} value={hub.invocationFilter} onChange={(event) => { hub.setInvocationFilter(event.target.value as 'all' | 'model' | 'user') }}>
-                  <option value='all'>{tt('filter.invocationAll')}</option>
-                  <option value='model'>{tt('filter.modelOnly')}</option>
-                  <option value='user'>{tt('filter.userOnly')}</option>
-                </select>
-              </label>
-              {activeFilterCount > 0 ? (
-                <button type='button' className={css.opBtn} onClick={() => { setSourceFilter('all'); hub.setInvocationFilter('all'); setStatusFilter('all') }}>{tt('filter.clear')}</button>
-              ) : null}
-            </div>
-          ) : null}
-          {shownCount > 0 && (shownCount !== totalCount || hub.invocationFilter !== 'all' || hasSourceFilter || statusFilterActive) ? (
+          {shownCount > 0 && shownCount !== totalCount ? (
             <div className={css.hintLine + ' ' + css.hintRowTight}>
-              <span>{tt('filter.showing', { shown: shownCount, total: totalCount, filtered: hub.invocationFilter !== 'all' || hasSourceFilter || statusFilterActive ? tt('filter.filteredSuffix') : '' })}</span>
+              <span>{tt('filter.showing', { shown: shownCount, total: totalCount, filtered: '' })}</span>
               {shortenedCount > 0 ? <span title={tt('filter.shortened', { count: shortenedCount })}>{tt('filter.shortened', { count: shortenedCount })}</span> : null}
             </div>
           ) : null}

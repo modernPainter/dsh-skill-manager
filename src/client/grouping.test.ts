@@ -18,25 +18,19 @@ const names = (skills: readonly CatalogSkill[]): string[] => skills.map((s) => s
 describe('filterSkillsByQuery', () => {
   const rows: CatalogSkill[] = [
     { ...skill('alpha'), description: 'PDF toolkit', displayName: 'Alpha Pro', shortDescription: 'pdf helper' },
-    { ...skill('beta'), description: 'spreadsheet', invocation: { modelInvocable: false, userInvocable: true } },
-    { ...skill('gamma'), description: 'slides', invocation: { modelInvocable: true, userInvocable: false } },
+    { ...skill('beta'), description: 'spreadsheet' },
+    { ...skill('gamma'), description: 'slides' },
   ]
 
   it('matches name, description, display name and short description', () => {
-    expect(names(filterSkillsByQuery(rows, 'alph', 'all'))).toEqual(['alpha'])
-    expect(names(filterSkillsByQuery(rows, 'PDF', 'all'))).toEqual(['alpha'])
-    expect(names(filterSkillsByQuery(rows, 'sheet', 'all'))).toEqual(['beta'])
+    expect(names(filterSkillsByQuery(rows, 'alph'))).toEqual(['alpha'])
+    expect(names(filterSkillsByQuery(rows, 'PDF'))).toEqual(['alpha'])
+    expect(names(filterSkillsByQuery(rows, 'sheet'))).toEqual(['beta'])
   })
 
   it('trims the query and keeps every row when it is blank', () => {
-    expect(names(filterSkillsByQuery(rows, '  beta  ', 'all'))).toEqual(['beta'])
-    expect(filterSkillsByQuery(rows, '   ', 'all')).toHaveLength(3)
-  })
-
-  it('applies the invocation filter before the query', () => {
-    expect(names(filterSkillsByQuery(rows, '', 'model'))).toEqual(['alpha', 'gamma'])
-    expect(names(filterSkillsByQuery(rows, '', 'user'))).toEqual(['alpha', 'beta'])
-    expect(names(filterSkillsByQuery(rows, 'beta', 'model'))).toEqual([])
+    expect(names(filterSkillsByQuery(rows, '  beta  '))).toEqual(['beta'])
+    expect(filterSkillsByQuery(rows, '   ')).toHaveLength(3)
   })
 })
 

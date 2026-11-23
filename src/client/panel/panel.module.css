@@ -317,6 +317,8 @@
 .filterBar .formLabel { flex: none; }
 .filterBar .select { flex: none; max-width: 150px; }
 .filterBar .segmented { flex: none; }
+/* 同行按钮不参与收缩，否则搜索框挤过来时「新建 skills」会被折成两行。 */
+.filterBar .button { flex: none; white-space: nowrap; }
 
 
 /* Panel title icon (skill identity). */
