@@ -5,7 +5,8 @@
  * panel stays the single owner of state.
  */
 
-import { useEffect, useRef, useState, type JSX } from 'react'
+import { useEffect, useMemo, useRef, useState, type JSX } from 'react'
+import { marked } from 'marked'
 import type { GroupsResponse, HubConfig, SkillDetail, SourceCheckResult, SourcesResponse } from '../../protocol.ts'
 import { copyTextToClipboard, isDisplayNameDistinct, tt } from '../helpers.ts'
 import { isProjectSource } from '../grouping.ts'
@@ -14,6 +15,41 @@ import css from './panel.module.css'
 import { dotStyle, formatDateTime, shortSha } from './format.ts'
 import { SourceStatusBadge } from './SourceStatusBadge.tsx'
 import { sourceLabel } from './source-label.ts'
+
+/** 不允许出现在渲染结果里的标签（marked 会原样放行 HTML）。 */
+const DROPPED_TAGS = new Set(['script', 'style', 'iframe', 'object', 'embed', 'link', 'meta', 'base', 'form', 'input', 'button', 'svg', 'math', 'template'])
+/** 只放行安全协议；`javascript:` / `data:` 一律清掉。 */
+const SAFE_URL_RE = /^(https?:|mailto:|#|\/|\.)/i
+
+/**
+ * 把 marked 的输出过一遍浏览器解析树的清洗：丢掉危险标签、事件属性、
+ * 内联样式与非安全链接。技能正文来自本机文件或下载的仓库技能，仍按
+ * 不可信内容处理。
+ */
+function sanitizeHtml(html: string): string {
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  for (const element of [...doc.body.querySelectorAll('*')]) {
+    if (DROPPED_TAGS.has(element.tagName.toLowerCase())) { element.remove(); continue }
+    for (const attribute of [...element.attributes]) {
+      const name = attribute.name.toLowerCase()
+      if (name.startsWith('on') || name === 'style' || name === 'srcdoc') { element.removeAttribute(attribute.name); continue }
+      if ((name === 'href' || name === 'src') && !SAFE_URL_RE.test(attribute.value.trim())) element.removeAttribute(attribute.name)
+    }
+  }
+  return doc.body.innerHTML
+}
+
+/** SKILL.md 正文按 Markdown 渲染（标题/列表/代码块/表格），不再显示原始文本。 */
+function MarkdownBody({ text }: { text: string }): JSX.Element {
+  const html = useMemo(() => {
+    try {
+      return sanitizeHtml(marked.parse(text, { async: false, gfm: true }) as string)
+    } catch {
+      return ''
+    }
+  }, [text])
+  return <div className={css.detailContent + ' ' + css.markdown} dangerouslySetInnerHTML={{ __html: html }} />
+}
 
 export interface SkillDetailViewProps {
   detail: SkillDetail
@@ -138,7 +174,7 @@ export function SkillDetailView(props: SkillDetailViewProps): JSX.Element {
       ) : (
         <p className={css.hintLine}>{tt('source.private')}</p>
       )}
-      <pre className={css.detailContent}>{detail.content}</pre>
+      <MarkdownBody text={detail.content} />
     </div>
   )
 }

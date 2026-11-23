@@ -184,6 +184,31 @@
 .detailSourceRaw { color: var(--hub-text-4); font-size: var(--hub-fs-11); }
 .detailContent { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--hub-fs-12); line-height: 1.6; white-space: pre-wrap; word-break: break-word; background: var(--hub-surface); border-radius: var(--hub-radius-md); padding: 14px 16px; max-height: 62vh; overflow: auto; }
 
+/* SKILL.md 渲染后的排版：正文用系统字体，代码仍用等宽字体。 */
+.markdown { font-family: inherit; font-size: var(--hub-fs-13); line-height: 1.7; white-space: normal; }
+.markdown > :first-child { margin-top: 0; }
+.markdown > :last-child { margin-bottom: 0; }
+.markdown h1, .markdown h2, .markdown h3, .markdown h4, .markdown h5, .markdown h6 { margin: 18px 0 8px; font-weight: 600; line-height: 1.35; }
+.markdown h1 { font-size: 20px; }
+.markdown h2 { font-size: 17px; }
+.markdown h3 { font-size: 15px; }
+.markdown h4, .markdown h5, .markdown h6 { font-size: var(--hub-fs-13); }
+.markdown p { margin: 8px 0; }
+.markdown ul, .markdown ol { margin: 8px 0; padding-left: 22px; }
+.markdown li { margin: 3px 0; }
+.markdown li > p { margin: 2px 0; }
+.markdown code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--hub-fs-12); background: var(--hub-hover); padding: 1px 5px; border-radius: 4px; }
+.markdown pre { margin: 10px 0; padding: 10px 12px; background: var(--hub-surface); border: 0.5px solid var(--hub-border); border-radius: var(--hub-radius-sm); overflow: auto; }
+.markdown pre code { background: none; padding: 0; font-size: var(--hub-fs-12); }
+.markdown blockquote { margin: 10px 0; padding: 2px 12px; border-left: 3px solid var(--hub-border-2); color: var(--hub-text-2); }
+.markdown table { display: block; margin: 10px 0; border-collapse: collapse; overflow: auto; font-size: var(--hub-fs-12); }
+.markdown th, .markdown td { border: 0.5px solid var(--hub-border); padding: 4px 8px; text-align: left; }
+.markdown th { background: var(--hub-hover); font-weight: 600; }
+.markdown a { color: var(--hub-accent); text-decoration: none; }
+.markdown a:hover { text-decoration: underline; }
+.markdown hr { margin: 16px 0; border: 0; border-top: 0.5px solid var(--hub-border); }
+.markdown img { max-width: 100%; }
+
 .form { display: flex; flex-direction: column; gap: 10px; background: var(--hub-surface); border: 0.5px solid var(--hub-border); border-radius: var(--hub-radius-md); padding: 14px 16px; }
 /* 角色切换后的还原条：一次切换只留一份快照，刷新后仍在。 */
 .roleBar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; padding: 9px 12px; border: 0.5px solid var(--hub-border); border-radius: var(--hub-radius-md); background: var(--hub-surface); font-size: var(--hub-fs-12); color: var(--hub-text-2); }
