@@ -129,7 +129,7 @@ export function SkillHubPanel(props: SkillHubPanelProps): React.JSX.Element {
     }
   }, [moreOpen])
 
-  // 切页时收起菜单：导入入口只在仓库页出现，避免状态跨页残留。
+  // 切页时收起菜单，避免下拉状态跨页残留。
   useEffect(() => { setMoreOpen(false) }, [page])
 
   // -------------------------------------------------------------- detail
@@ -213,18 +213,17 @@ export function SkillHubPanel(props: SkillHubPanelProps): React.JSX.Element {
         ? null
         : generalActiveShown
 
-  // 导入入口（其他 Agent / ZIP）属于仓库页内容，渲染在仓库区标题行右侧。
+  // 技能页的导入入口：从其他 Agent / 从 ZIP，下拉两个菜单项。
   const importMenu = (
     <span className={css.menuAnchor} ref={moreMenuRef}>
       <button
         type='button'
-        className={css.opBtn + ' ' + css.moreButton}
-        aria-label={tt('panel.more')}
+        className={css.button}
         aria-haspopup='menu'
         aria-expanded={moreOpen}
-        title={tt('panel.more')}
+        title={tt('panel.import')}
         onClick={() => { setMoreOpen((value) => !value) }}
-      >⋯</button>
+      >{tt('panel.import')} ▾</button>
       {moreOpen ? (
         <div className={css.menu} role='menu'>
           <button type='button' role='menuitem' className={css.menuItem} onClick={() => { setMoreOpen(false); setShowForeign(true) }}>{tt('foreign.open')}</button>
@@ -314,13 +313,13 @@ export function SkillHubPanel(props: SkillHubPanelProps): React.JSX.Element {
           skills={(catalog?.skills ?? []).map((skill) => skill.name)}
           uploadableSkills={(catalog?.skills ?? []).filter((skill) => skill.source !== 'runtime').map((skill) => skill.name)}
           onChanged={() => { void hub.reloadCatalog() }}
-          actions={importMenu}
         />
       ) : catalog !== null ? (
         <>
           <div className={css.filterBar}>
             <input className={css.search} value={search} onChange={(event) => { setSearch(event.target.value) }} placeholder={tt('panel.search')} />
             <button type='button' className={css.button + ' ' + css.primary} onClick={() => { setShowForm((value) => !value) }}>{tt('panel.new')}</button>
+            {importMenu}
           </div>
           {shownCount > 0 && shownCount !== totalCount ? (
             <div className={css.hintLine + ' ' + css.hintRowTight}>

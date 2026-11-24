@@ -12,7 +12,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { GitRepoSource, RepoSkillManifestEntry } from '../../protocol.ts'
 import { errorMessage } from '../helpers.ts'
 import { Toast } from './Toast.tsx'
-import { IconChevronDownOutline14, IconScanOutline16 } from '../icons.tsx'
+import { IconScanOutline16 } from '../icons.tsx'
 import {
   managerApi,
   type InstallProgress,
@@ -50,8 +50,6 @@ export interface ManagerViewProps {
   uploadableSkills: string[]
   /** 安装成功后刷新目录。 */
   onChanged: () => void
-  /** 仓库区标题行右侧的操作（导入入口由上层传入）。 */
-  actions?: React.ReactNode
 }
 
 interface PendingConfirm {
@@ -113,6 +111,10 @@ const ghostCardBtn: React.CSSProperties = {
 const buttonWithIcon: React.CSSProperties = { ...button, display: 'inline-flex', alignItems: 'center', gap: 4 }
 const danger: React.CSSProperties = { ...button, borderColor: '#d9534f', color: '#d9534f' }
 const muted: React.CSSProperties = { fontSize: 12, opacity: 0.7 }
+/** 弹窗：添加仓库、上传 skills 只在需要时出现。 */
+const dialogMask: React.CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60 }
+const dialogCard: React.CSSProperties = { background: 'var(--dsh-bg, #fff)', borderRadius: 10, padding: 18, width: 520, maxWidth: '92vw', maxHeight: '86vh', overflow: 'auto', boxShadow: '0 12px 32px rgba(0,0,0,0.18)' }
+const dialogTitle: React.CSSProperties = { margin: '0 0 12px', fontSize: 15 }
 const list: React.CSSProperties = { listStyle: 'none', margin: 0, padding: 0 }
 const item: React.CSSProperties = { ...box, marginBottom: 8 }
 /** 扫描结果卡片网格：一个 skills 一张卡，紧凑高度。 */
@@ -244,9 +246,8 @@ export function ManagerView(props: ManagerViewProps): React.JSX.Element {
 
   return (
     <div>
-      <div style={{ ...row, marginBottom: 12, justifyContent: 'space-between' }}>
+      <div style={{ ...row, marginBottom: 12 }}>
         <span style={muted}>管理自有 Git skills 仓库：扫描、安装与上传</span>
-        {props.actions ?? null}
       </div>
 
       <Toast message={notice} onDone={() => { setNotice(null) }} />
@@ -434,14 +435,37 @@ interface SectionProps {
   confirm: (spec: PendingConfirm) => void
 }
 
+/** 轻量弹窗壳：点击遮罩或按 Esc 关闭，内容与底部按钮由调用方给。 */
+function Dialog(props: { title: string; onClose: () => void; footer: React.ReactNode; children: React.ReactNode }): React.JSX.Element {
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => { if (event.key === 'Escape') props.onClose() }
+    window.addEventListener('keydown', onKeyDown)
+    return () => { window.removeEventListener('keydown', onKeyDown) }
+  }, [props.onClose])
+  return (
+    <div style={dialogMask} onClick={props.onClose}>
+      <div style={dialogCard} role='dialog' aria-modal='true' onClick={(event) => { event.stopPropagation() }}>
+        <h3 style={dialogTitle}>{props.title}</h3>
+        {props.children}
+        <div style={{ ...row, justifyContent: 'flex-end', marginTop: 14 }}>{props.footer}</div>
+      </div>
+    </div>
+  )
+}
+
 function ReposSection(props: SectionProps): React.JSX.Element {
   const [url, setUrl] = useState('')
   const [branch, setBranch] = useState('')
   const [token, setToken] = useState('')
-  /** 低频字段（分支、令牌）收进「高级选项」，默认只露仓库地址。 */
-  const [advancedOpen, setAdvancedOpen] = useState(false)
+  /** 添加仓库与上传 skills 都收进弹窗，平时只留两个入口按钮。 */
+  const [addOpen, setAddOpen] = useState(false)
+  const [uploadOpen, setUploadOpen] = useState(false)
 
   const [activeSlug, setActiveSlug] = useState<string | null>(null)
+  /** 正在测试连接的仓库：按钮就地转圈，避免点击后没有任何反馈。 */
+  const [testingSlug, setTestingSlug] = useState<string | null>(null)
+  /** 正在扫描的仓库：扫描可能要拉远端，按钮同样就地转圈。 */
+  const [scanningSlug, setScanningSlug] = useState<string | null>(null)
   const [scan, setScan] = useState<{ skills: readonly RepoSkillManifestEntry[]; commitSha: string; ref: string; source: string } | null>(null)
   const [overwrite, setOverwrite] = useState(false)
   const [allowLocalOverwrite, setAllowLocalOverwrite] = useState(false)
@@ -458,20 +482,24 @@ function ReposSection(props: SectionProps): React.JSX.Element {
 
   const addRepo = async (): Promise<string> => {
     if (url.trim() === '') throw new Error('请填写仓库 URL')
-    let authId: string | undefined
-    if (token.trim() !== '') {
-      const created = await managerApi.addAuth(authLabelFor(url), token.trim())
-      authId = created.auth.id
-      setToken('')
-    }
+    if (token.trim() === '') throw new Error('请填写 HTTPS Token（推送与私有仓库访问都需要它）')
+    const created = await managerApi.addAuth(authLabelFor(url), token.trim())
+    setToken('')
     await managerApi.addRepo({
       url: url.trim(),
-      ...(authId !== undefined ? { authId } : {}),
+      authId: created.auth.id,
       ...(branch.trim() !== '' ? { defaultBranch: branch.trim() } : {}),
     })
     setUrl('')
     await props.onRefresh()
     return '仓库已保存'
+  }
+
+  /** 保存成功才收弹窗；失败由 run 统一弹错误轻提示，弹窗保留已填内容。 */
+  const saveRepo = async (): Promise<string> => {
+    const message = await addRepo()
+    setAddOpen(false)
+    return message
   }
 
   const doScan = async (repo: GitRepoSource): Promise<void> => {
@@ -543,6 +571,21 @@ function ReposSection(props: SectionProps): React.JSX.Element {
     return `已推送 ${result.uploaded.length} 个 skills 到 ${result.branch} @ ${result.commitSha.slice(0, 8)}${rejected}`
   }
 
+  /** 推送成功后收弹窗并清空勾选，避免下次误推同一批。 */
+  const pushUpload = async (): Promise<string> => {
+    const message = await doUpload()
+    setUploadOpen(false)
+    setUploadNames(new Set())
+    return message
+  }
+
+  /** 添加仓库的前置条件：地址与 Token 都必填。 */
+  const addBlocked = url.trim() === ''
+    ? '请填写仓库地址'
+    : token.trim() === ''
+      ? '请填写 HTTPS Token'
+      : null
+
   /** 推送的前置条件；为 null 才允许点。没有令牌的仓库不可写，也不能作为推送目标。 */
   const uploadRepo = uploadRepos.find((entry) => entry.slug === uploadSlug)
   const uploadBlocked = uploadSlug === ''
@@ -557,38 +600,12 @@ function ReposSection(props: SectionProps): React.JSX.Element {
 
   return (
     <div>
-      <section style={box}>
-        <strong style={{ display: 'block', marginBottom: 8 }}>添加仓库</strong>
-        <div style={{ ...row, marginBottom: advancedOpen ? 8 : 0 }}>
-          <input style={{ ...input, flex: 1, minWidth: 260 }} placeholder='粘贴仓库地址，如 https://github.com/anthropics/skills' value={url} onChange={(event) => { setUrl(event.target.value) }} />
-          <button type='button' style={primary} disabled={props.busy !== null} onClick={() => { void props.run('add-repo', addRepo) }}>保存</button>
-          <button type='button' style={buttonWithIcon} onClick={() => { setAdvancedOpen((value) => !value) }}>
-            <span style={{ display: 'inline-flex', transform: advancedOpen ? 'rotate(180deg)' : 'none', transition: 'transform 120ms ease' }}>
-              <IconChevronDownOutline14 />
-            </span>
-            {advancedOpen ? '收起高级选项' : '高级选项'}
-          </button>
-        </div>
-        {advancedOpen ? (
-          <>
-            <div style={{ ...row, marginBottom: 8 }}>
-              <input style={input} placeholder='默认分支（main）' value={branch} onChange={(event) => { setBranch(event.target.value) }} />
-            </div>
-            <div style={{ ...row, marginBottom: 8 }}>
-              <input
-                style={{ ...input, flex: 1, minWidth: 260 }}
-                type='password'
-                placeholder='HTTPS Token（可选，仅存本机，不会回显）'
-                value={token}
-                onChange={(event) => { setToken(event.target.value) }}
-              />
-            </div>
-          </>
-        ) : null}
-        <p style={muted}>支持 GitHub / GitLab / Gitea / 云效 Codeup；仓库根目录可含 skill-manifest.json，缺失时自动扫描目录。</p>
-      </section>
+      <div style={{ ...row, marginBottom: 12 }}>
+        <button type='button' style={primary} onClick={() => { setAddOpen(true) }}>添加仓库</button>
+        <button type='button' style={button} onClick={() => { setUploadOpen(true) }}>上传本地 skills</button>
+      </div>
 
-      {props.repos.length === 0 ? <div style={box}>还没有配置仓库。添加后即可扫描、安装、上传 skills。</div> : null}
+      {props.repos.length === 0 ? <div style={box}>还没有配置仓库。点击「添加仓库」填写地址后即可扫描、安装、上传 skills。</div> : null}
 
       <ul style={list}>
         {props.repos.map((repo) => (
@@ -598,12 +615,43 @@ function ReposSection(props: SectionProps): React.JSX.Element {
               <span style={muted}>{backendLabel(repo.backend)} · {repo.defaultBranch}</span>
               {repo.lastCheckedAt !== undefined ? <span style={muted}>最近扫描 {new Date(repo.lastCheckedAt).toLocaleString()}</span> : null}
               <span style={{ flex: 1 }} />
-              <button type='button' style={button} disabled={props.busy !== null} onClick={() => { void props.run('test:' + repo.slug, async () => {
-                const result = await managerApi.testRepo(repo.slug)
-                return result.ok ? `连接正常（${backendLabel(result.backend ?? repo.backend)}，默认分支 ${result.defaultBranch ?? repo.defaultBranch}）` : '连接失败：' + (result.error ?? '未知原因')
-              }) }}>测试连接</button>
-              <button type='button' style={buttonWithIcon} disabled={props.busy !== null} onClick={() => { void props.run('scan:' + repo.slug, async () => { await doScan(repo); return undefined }) }}>
-                <IconScanOutline16 size={14} />扫描
+              <button
+                type='button'
+                style={buttonWithIcon}
+                disabled={props.busy !== null || testingSlug !== null}
+                onClick={() => {
+                  setTestingSlug(repo.slug)
+                  void props.run('test:' + repo.slug, async () => {
+                    try {
+                      const result = await managerApi.testRepo(repo.slug)
+                      // 连接失败走错误轻提示（红色），成功才走绿色提示。
+                      if (!result.ok) throw new Error('连接失败：' + (result.error ?? '未知原因'))
+                      return `连接正常（${backendLabel(result.backend ?? repo.backend)}，默认分支 ${result.defaultBranch ?? repo.defaultBranch}）`
+                    } finally {
+                      setTestingSlug(null)
+                    }
+                  })
+                }}
+              >
+                {testingSlug === repo.slug ? <><span className='dsh-spinner' />测试中…</> : '测试连接'}
+              </button>
+              <button
+                type='button'
+                style={buttonWithIcon}
+                disabled={props.busy !== null || scanningSlug !== null}
+                onClick={() => {
+                  setScanningSlug(repo.slug)
+                  void props.run('scan:' + repo.slug, async () => {
+                    try {
+                      await doScan(repo)
+                      return undefined
+                    } finally {
+                      setScanningSlug(null)
+                    }
+                  })
+                }}
+              >
+                {scanningSlug === repo.slug ? <><span className='dsh-spinner' />扫描中…</> : <><IconScanOutline16 size={14} />扫描</>}
               </button>
               <button type='button' style={danger} disabled={props.busy !== null} onClick={() => {
                 props.confirm({
@@ -690,49 +738,88 @@ function ReposSection(props: SectionProps): React.JSX.Element {
         </section>
       ) : null}
 
-      <section style={box}>
-        <strong style={{ display: 'block', marginBottom: 8 }}>上传本地 skills 到仓库</strong>
-        <div style={{ ...row, marginBottom: 8 }}>
-          <select style={input} value={uploadSlug} onChange={(event) => { setUploadSlug(event.target.value) }}>
-            <option value=''>选择目标仓库</option>
-            {uploadRepos.map((repo) => <option key={repo.slug} value={repo.slug}>{repoDisplayName(repo.slug)}</option>)}
-          </select>
-          <input style={input} placeholder='仓库内目录（skills）' value={uploadDir} onChange={(event) => { setUploadDir(event.target.value) }} />
-          <button
-            type='button'
-            style={props.busy !== null || uploadBlocked !== null ? primaryDisabled : primary}
-            disabled={props.busy !== null || uploadBlocked !== null}
-            title={uploadBlocked ?? '推送选中的 skills'}
-            onClick={() => {
-              props.confirm({
-                title: '推送 skills 到仓库',
-                message: `将 ${uploadNames.size} 个本地 skills 推送到 ${repoDisplayName(uploadSlug)}（上传前会做内容审计，命中阻断规则会被拒绝）。`,
-                confirmLabel: '推送',
-                run: async () => { await props.run('upload', doUpload) },
-              })
-            }}
-          >推送 {uploadNames.size} 个</button>
-        </div>
-        {uploadRepos.length === 0 ? <p style={muted}>没有带令牌的仓库。添加仓库时填写 HTTPS Token 后才能推送。</p> : null}
-        <div style={{ ...row, maxHeight: 180, overflow: 'auto' }}>
-          {props.uploadableSkills.length === 0 ? <span style={muted}>没有可上传的本地 skills。</span> : props.uploadableSkills.map((name) => (
-            <label key={name} style={{ ...muted, fontSize: 12 }}>
-              <input
-                type='checkbox'
-                checked={uploadNames.has(name)}
-                onChange={(event) => {
-                  setUploadNames((previous) => {
-                    const next = new Set(previous)
-                    if (event.target.checked) next.add(name)
-                    else next.delete(name)
-                    return next
-                  })
-                }}
-              /> {name}
-            </label>
-          ))}
-        </div>
-      </section>
+      {addOpen ? (
+        <Dialog
+          title='添加仓库'
+          onClose={() => { setAddOpen(false) }}
+          footer={<>
+            <button type='button' style={button} onClick={() => { setAddOpen(false) }}>取消</button>
+            <button
+              type='button'
+              style={props.busy !== null || addBlocked !== null ? primaryDisabled : primary}
+              disabled={props.busy !== null || addBlocked !== null}
+              title={addBlocked ?? '保存仓库'}
+              onClick={() => { void props.run('add-repo', saveRepo) }}
+            >保存</button>
+          </>}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <input style={input} placeholder='粘贴仓库地址，如 https://github.com/anthropics/skills' value={url} onChange={(event) => { setUrl(event.target.value) }} />
+            <input style={input} placeholder='默认分支（main）' value={branch} onChange={(event) => { setBranch(event.target.value) }} />
+            <input
+              style={input}
+              type='password'
+              placeholder='HTTPS Token（必填，仅存本机，不会回显）'
+              value={token}
+              onChange={(event) => { setToken(event.target.value) }}
+            />
+            <p style={muted}>支持 GitHub / GitLab / Gitea / 云效 Codeup；Token 只存本机，访问仓库与推送都需要它。</p>
+          </div>
+        </Dialog>
+      ) : null}
+
+      {uploadOpen ? (
+        <Dialog
+          title='上传本地 skills 到仓库'
+          onClose={() => { setUploadOpen(false) }}
+          footer={<>
+            <button type='button' style={button} onClick={() => { setUploadOpen(false) }}>取消</button>
+            <button
+              type='button'
+              style={props.busy !== null || uploadBlocked !== null ? primaryDisabled : primary}
+              disabled={props.busy !== null || uploadBlocked !== null}
+              title={uploadBlocked ?? '推送选中的 skills'}
+              onClick={() => {
+                props.confirm({
+                  title: '推送 skills 到仓库',
+                  message: `将 ${uploadNames.size} 个本地 skills 推送到 ${repoDisplayName(uploadSlug)}（上传前会做内容审计，命中阻断规则会被拒绝）。`,
+                  confirmLabel: '推送',
+                  run: async () => { await props.run('upload', pushUpload) },
+                })
+              }}
+            >推送 {uploadNames.size} 个</button>
+          </>}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={row}>
+              <select style={{ ...input, flex: 1 }} value={uploadSlug} onChange={(event) => { setUploadSlug(event.target.value) }}>
+                <option value=''>选择目标仓库</option>
+                {uploadRepos.map((repo) => <option key={repo.slug} value={repo.slug}>{repoDisplayName(repo.slug)}</option>)}
+              </select>
+              <input style={{ ...input, flex: 1 }} placeholder='仓库内目录（skills）' value={uploadDir} onChange={(event) => { setUploadDir(event.target.value) }} />
+            </div>
+            {uploadRepos.length === 0 ? <p style={muted}>没有带令牌的仓库。添加仓库时填写 HTTPS Token 后才能推送。</p> : null}
+            <div style={{ ...row, maxHeight: '40vh', overflow: 'auto', alignItems: 'flex-start', alignContent: 'flex-start' }}>
+              {props.uploadableSkills.length === 0 ? <span style={muted}>没有可上传的本地 skills。</span> : props.uploadableSkills.map((name) => (
+                <label key={name} style={{ ...muted, fontSize: 12 }}>
+                  <input
+                    type='checkbox'
+                    checked={uploadNames.has(name)}
+                    onChange={(event) => {
+                      setUploadNames((previous) => {
+                        const next = new Set(previous)
+                        if (event.target.checked) next.add(name)
+                        else next.delete(name)
+                        return next
+                      })
+                    }}
+                  /> {name}
+                </label>
+              ))}
+            </div>
+          </div>
+        </Dialog>
+      ) : null}
     </div>
   )
 }
